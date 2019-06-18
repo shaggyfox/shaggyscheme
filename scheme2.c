@@ -167,7 +167,6 @@ cell_t *cons(scheme_ctx_t *ctx, cell_t *car, cell_t *cdr)
   return ret;
 }
 
-
 #define mark_cell(cell) (cell)->flags |= CELL_F_MARK;
 #define unmark_cell(cell) (cell)->flags &= ~CELL_F_MARK;
 
@@ -215,7 +214,6 @@ void gc_collect(scheme_ctx_t *ctx)
 #define is_null(ctx, obj) ((ctx)->NIL == obj)
 #define is_sym(obj) ((obj)->type == CELL_T_SYMBOL)
 #define is_pair(obj) ((obj)->type == CELL_T_PAIR)
-#define is_list(ctx, obj) (is_null(ctx, obj) || (is_pair(obj) && (is_null(ctx, _cdr(obj)) || is_pair(_cdr(obj)))))
 
 /* symbols */
 
@@ -238,6 +236,11 @@ cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
   return ret;
 }
 
+/* FIXME */
+cell_t *mk_primop(scheme_ctx_t *ctx, cell_t (*fn)(cell_t *))
+{
+  return ctx->NIL;
+}
 
 /* --- obj --- */
 
@@ -268,15 +271,8 @@ cell_t *get_object(scheme_ctx_t *ctx)
   return NULL; /* err or end of file XXX */
 }
 
-void scheme_init(scheme_ctx_t *ctx) {
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->NIL = &ctx->NIL_VALUE;
-  ctx->result = ctx->NIL;
-  ctx->sink = ctx->NIL;
-  ctx->syms = ctx->NIL;
-  ctx->env = ctx->NIL;
-  tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
-}
+/*------------------------ print -------------------- */
+
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
 void print_pair(scheme_ctx_t *ctx, cell_t *pair)
 {
@@ -308,6 +304,18 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       }
       break;
   }
+}
+
+
+/* ---------------t main .. */
+void scheme_init(scheme_ctx_t *ctx) {
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->NIL = &ctx->NIL_VALUE;
+  ctx->result = ctx->NIL;
+  ctx->sink = ctx->NIL;
+  ctx->syms = ctx->NIL;
+  ctx->env = ctx->NIL;
+  tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
 }
 
 int main()
