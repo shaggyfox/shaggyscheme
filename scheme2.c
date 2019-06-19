@@ -97,6 +97,10 @@ enum cell_type_e {
   CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL,
   CELL_T_INTEGER, CELL_T_PRIMOP};
 
+static char *cell_type_names[] = {
+  "empty", "pair", "string", "symbol", "integer", "primop", NULL
+};
+
 struct cell_s {
   enum cell_type_e type;
   int flags;
@@ -286,7 +290,6 @@ cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
   return ret;
 }
 
-/* FIXME */
 cell_t *mk_primop(scheme_ctx_t *ctx, cell_t *(*fn)(scheme_ctx_t *, cell_t *))
 {
   cell_t *ret = get_cell(ctx);
@@ -360,6 +363,9 @@ cell_t *get_obj_list(scheme_ctx_t *ctx)
 cell_t *get_object(scheme_ctx_t *ctx)
 {
   char *value = tokenizer_get_token(&ctx->tokenizer_ctx);
+  if (!value) {
+    return NULL; /* eof */
+  }
   cell_t *obj = mk_object_from_token(ctx, value);
   if (obj == mk_symbol(ctx, "'")) {
     return cons(ctx, mk_symbol(ctx, "quote"), cons(ctx, get_object(ctx), ctx->NIL));
@@ -419,25 +425,100 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
 
 /* primops */
 
-cell_t *plus(scheme_ctx_t *ctx, cell_t *args)
+
+static char *get_type_name(int type)
+{
+  return cell_type_names[type];
+}
+
+static int get_args(cell_t *args, int nr, int types[], cell_t *ret[])
+{
+  int i = 0;
+  while (i < nr) {
+    if (!is_pair(args)) {
+      printf("ERROR: missing argument, expected %d given %d\n", nr, i);
+      return -1;
+    }
+    cell_t *obj = _car(args);
+    if (obj->type != types[i]) {
+      if (types[i] != CELL_T_EMPTY) {
+        printf("ERROR: %s expected %s given\n", get_type_name(types[i]), get_type_name(obj->type));
+        return -1;
+      }
+    }
+    ret[i] = obj;
+    args = _cdr(args);
+    ++i;
+  }
+  int to_many_args = 0;
+  while (is_pair(args)) {
+    ++to_many_args;
+    args = _cdr(args);
+  }
+  if (to_many_args) {
+    printf("ERROR: to many arguments %d expected %d given\n", nr, nr + to_many_args);
+    return -1;
+  }
+  return 0;
+}
+
+cell_t *car(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[1];
+  int types[1] = {CELL_T_PAIR};
+  if (get_args(args, 1, types, arg)) {
+    return ctx->NIL;
+  }
+  return _car(arg[0]);
+}
+
+cell_t *cdr(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[1];
+  int types[1] = {CELL_T_PAIR};
+  if (get_args(args, 1, types, arg)) {
+    return ctx->NIL;
+  }
+  return _cdr(arg[0]);
+}
+
+static void plus_cb(int *ret, int in) { *ret += in; }
+static void minus_cb(int *ret, int in) { *ret -= in; }
+static void mul_cb(int *ret, int in) { *ret *= in; }
+static void div_cb(int *ret, int in) { *ret /= in; }
+cell_t *do_integer_math(scheme_ctx_t *ctx, cell_t *args, void (*cb)(int *ret, int in))
 {
   int ret = 0;
+  int i = 0;
   while (!is_null(ctx, args)) {
     if (is_integer(_car(args))) {
-      ret += _car(args)->u.integer;
+      if (i == 0) {
+        ret = _car(args)->u.integer;
+      } else {
+        (*cb)(&ret, _car(args)->u.integer);
+      }
+    } else {
+      printf("ERROR: integer expected %s given\n", get_type_name(_car(args)->type));
+      return ctx->NIL;
     }
+    ++i;
     args = _cdr(args);
   }
   return mk_integer(ctx, ret);
 }
 
+cell_t *op_minus(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, minus_cb); }
+cell_t *op_plus(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, plus_cb); }
+cell_t *op_mul(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, mul_cb); }
+cell_t *op_div(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, div_cb); }
+
 cell_t *display(scheme_ctx_t *ctx, cell_t *args)
 {
-  cell_t *arg1 = ctx->NIL;
-  if (is_pair(args)) {
-    arg1 = _car(args);
+  cell_t *arg_array[1];
+  int arg_types[] = {CELL_T_EMPTY};
+  if (!get_args(args, 1, arg_types, arg_array)) {
+    print_obj(ctx, arg_array[0]);
   }
-  print_obj(ctx, arg1);
   return ctx->NIL;
 }
 
@@ -449,22 +530,16 @@ cell_t *newline(scheme_ctx_t *ctx, cell_t *args)
 
 cell_t *eq(scheme_ctx_t *ctx, cell_t *args)
 {
-  cell_t *ret = ctx->FALSE;
-  cell_t *arg1;
-  cell_t *arg2;
-  if (is_pair(arg1)) {
-    arg1 = _car(args);
-    args = _cdr(args);
+  cell_t *arg[2];
+  int arg_types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(args, 2, arg_types, arg)) {
+    return ctx->FALSE;
   }
-  if (is_pair(args)) {
-    arg2 = _car(args);
-  }
-  return (arg1 == arg2) ? ctx->TRUE : ctx->FALSE;
+  return (arg[0] == arg[1]) ? ctx->TRUE : ctx->FALSE;
 }
 
 cell_t *eqv(scheme_ctx_t *ctx, cell_t *args)
 {
-  /* XXX */
   return ctx->FALSE;
 }
 
@@ -475,16 +550,12 @@ cell_t *apply_primop(scheme_ctx_t *ctx, cell_t *primop, cell_t *args)
 
 cell_t *primop_cons(scheme_ctx_t *ctx, cell_t *args)
 {
-  cell_t *arg1 = ctx->NIL;
-  cell_t *arg2 = ctx->NIL;
-  if (is_pair(args)) {
-    arg1 = _car(args);
-    args = _cdr(args);
+  cell_t *arg[2];
+  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
   }
-  if (is_pair(args)) {
-    arg2 = _car(args);
-  }
-  return cons(ctx, arg1, arg2);
+  return cons(ctx, arg[0], arg[1]);
 }
 
 /* environment hanlding */
@@ -662,16 +733,23 @@ int main()
   scheme_init(&ctx);
   env_define(&ctx, mk_symbol(&ctx, "#t"), ctx.TRUE);
   env_define(&ctx, mk_symbol(&ctx, "#f"), ctx.FALSE);
-  env_define(&ctx, mk_symbol(&ctx, "eq"), mk_primop(&ctx, &eq));
+  env_define(&ctx, mk_symbol(&ctx, "eq?"), mk_primop(&ctx, &eq));
   env_define(&ctx, mk_symbol(&ctx, "display"), mk_primop(&ctx, &display));
   env_define(&ctx, mk_symbol(&ctx, "newline"), mk_primop(&ctx, &newline));
   env_define(&ctx, mk_symbol(&ctx, "cons"), mk_primop(&ctx, &primop_cons));
-  env_define(&ctx, mk_symbol(&ctx, "+"), mk_primop(&ctx, &plus));
+  env_define(&ctx, mk_symbol(&ctx, "car"), mk_primop(&ctx, &car));
+  env_define(&ctx, mk_symbol(&ctx, "cdr"), mk_primop(&ctx, &cdr));
+
+  env_define(&ctx, mk_symbol(&ctx, "+"), mk_primop(&ctx, &op_plus));
+  env_define(&ctx, mk_symbol(&ctx, "-"), mk_primop(&ctx, &op_minus));
+  env_define(&ctx, mk_symbol(&ctx, "*"), mk_primop(&ctx, &op_mul));
+  env_define(&ctx, mk_symbol(&ctx, "/"), mk_primop(&ctx, &op_div));
   ctx.sink = ctx.NIL;
   gc_collect(&ctx);
   gc_info(&ctx);
-  for(;;) {
-    cell_t *obj = get_object(&ctx);
+ 
+  cell_t *obj;
+  while((obj = get_object(&ctx))) {
     print_obj(&ctx, eval(&ctx, obj));
     printf("\n");
     gc_info(&ctx);
