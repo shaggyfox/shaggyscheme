@@ -277,17 +277,14 @@ cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
   cell_t *ret = ctx->NIL;
   for (cell_t *tmp = ctx->syms; !is_null(ctx, tmp); tmp = _cdr(tmp)) {
     if (!strcmp(str, _car(tmp)->u.symbol)) {
-      ret = _car(tmp);
-      break;
+      return _car(tmp);
     }
   }
-  if (is_null(ctx, ret)) {
-    /* add new entry */
-    ret = get_cell(ctx);
-    ret->type = CELL_T_SYMBOL;
-    ret->u.symbol = strdup(str);
-    ctx->syms = cons(ctx, ret, ctx->syms);
-  }
+  /* add new entry */
+  ret = get_cell(ctx);
+  ret->type = CELL_T_SYMBOL;
+  ret->u.symbol = strdup(str);
+  ctx->syms = cons(ctx, ret, ctx->syms);
   return ret;
 }
 
@@ -772,7 +769,17 @@ int main()
   while((obj = get_object(&ctx))) {
     print_obj(&ctx, eval(&ctx, obj));
     printf("\n");
+    /* debug stuff */
+#ifdef DEBUG
     gc_info(&ctx);
+    for (cell_t *t = ctx.sink; is_pair(t); t = _cdr(t)) {
+      printf("sink: %s ", get_type_name(_car(t)->type));
+      if (is_sym(_car(t))) {
+        printf("%s", _car(t)->u.symbol);
+      }
+      printf("\n");
+    }
+#endif
     ctx.sink = ctx.NIL;
   }
   return 0;
