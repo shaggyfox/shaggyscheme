@@ -592,7 +592,6 @@ cell_t *eval_ex(
         /* TAIL RECURSION: */
         /* evaluate arguments and return to caller */
         *tail_recursion_args = eval_list(ctx, args);
-        gc_info(ctx);
 
         return ctx->NIL;
       }
