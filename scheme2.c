@@ -225,12 +225,13 @@ void gc_collect(scheme_ctx_t *ctx)
     }
   }
 #endif
-
+  int collected = 0;
   for (int i = 0; i < MAX_MEMORY; ++i) {
     if (ctx->memory[i].flags & CELL_F_USED) {
       if (!(ctx->memory[i].flags & CELL_F_MARK)) {
         ctx->memory[i].flags &= ~CELL_F_USED;
         memset(&ctx->memory[i], 0, sizeof(ctx->memory[i]));
+        ++ collected;
         
       }
     }
@@ -239,6 +240,9 @@ void gc_collect(scheme_ctx_t *ctx)
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
   unmark_cells(ctx->args);
+  if (collected) {
+    printf("DEBUG: gc collect %d cells\n", collected);
+  }
 }
 
 void gc_info(scheme_ctx_t *ctx)
