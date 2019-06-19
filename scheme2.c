@@ -280,6 +280,14 @@ cell_t *mk_string(scheme_ctx_t *ctx, char* str)
   return ret;
 }
 
+cell_t *mk_integer(scheme_ctx_t *ctx, int integer)
+{
+  cell_t *ret = get_cell(ctx);
+  ret->type = CELL_T_INTEGER;
+  ret->u.integer = integer;
+  return ret;
+}
+
 /* --- obj --- */
 
 cell_t *mk_object_from_token(scheme_ctx_t *ctx, char *token)
@@ -294,7 +302,11 @@ cell_t *mk_object_from_token(scheme_ctx_t *ctx, char *token)
       ret = mk_string(ctx, token+1);
       break;
     default:
-      ret = mk_symbol(ctx, token);
+      if (strlen(token) == strspn(token, "0123456789")) {
+        ret = mk_integer(ctx, strtol(token, NULL, 10));
+      } else {
+        ret = mk_symbol(ctx, token);
+      }
       break;
   }
   return ret;
@@ -352,6 +364,9 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       break;
     case CELL_T_PAIR:
       print_pair(ctx, obj);
+      break;
+    case CELL_T_INTEGER:
+      printf("%i ", obj->u.integer);
       break;
     default:
       if (is_null(ctx, obj)) {
