@@ -90,10 +90,12 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
 /* -----------------------memory management ---------------------------- */
 
 
+typedef struct scheme_ctx_s scheme_ctx_t;
 typedef struct cell_s cell_t;
 
 enum cell_type_e {
-  CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL, CELL_T_INTEGER};
+  CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL,
+  CELL_T_INTEGER, CELL_T_PRIMOP};
 
 struct cell_s {
   enum cell_type_e type;
@@ -108,21 +110,27 @@ struct cell_s {
     char *string;
     char *symbol;
     int integer;
+    cell_t *(*primop)(scheme_ctx_t *, cell_t *);
   } u;
 };
-
-typedef struct scheme_ctx_s scheme_ctx_t;
 
 #define MAX_MEMORY 100
 struct scheme_ctx_s {
   cell_t NIL_VALUE;
+  cell_t TRUE_VALUE;
+  cell_t FALSE_VALUE;
   cell_t *NIL;
+  cell_t *FALSE;
+  cell_t *TRUE;
   cell_t *syms;
   cell_t *sink;
   cell_t *env;
+  cell_t *code;
   cell_t *result;
   cell_t memory[MAX_MEMORY];
   tokenizer_ctx_t tokenizer_ctx;
+  cell_t *PARENTHESIS_OPEN;
+  cell_t *PARENTHESIS_CLOSE;
 };
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
@@ -147,8 +155,10 @@ cell_t *raw_cons(scheme_ctx_t *ctx, cell_t *car, cell_t *cdr)
   return ret;
 }
 
+void gc_collect(scheme_ctx_t *ctx);
 cell_t *get_cell(scheme_ctx_t *ctx)
 {
+  gc_collect(ctx);
   return add_to_sink(ctx, raw_get_cell(ctx));
 }
 
@@ -197,6 +207,8 @@ void unmark_cells(cell_t *cell)
 void gc_collect(scheme_ctx_t *ctx)
 {
   mark_cells(ctx->sink);
+  mark_cells(ctx->syms);
+  mark_cells(ctx->env);
   for (int i = 0; i < MAX_MEMORY; ++i) {
     if (ctx->memory[i].flags & CELL_F_USED) {
       if (!(ctx->memory[i].flags & CELL_F_MARK)) {
@@ -207,6 +219,19 @@ void gc_collect(scheme_ctx_t *ctx)
     }
   }
   unmark_cells(ctx->sink);
+  unmark_cells(ctx->syms);
+  unmark_cells(ctx->env);
+}
+
+void gc_info(scheme_ctx_t *ctx)
+{
+  int ret = MAX_MEMORY;
+  for (int i = 0; i < MAX_MEMORY; ++i) {
+    if (ctx->memory[i].flags & CELL_F_USED) {
+      -- ret;
+    }
+  }
+  printf("%d cells are free\n", ret);
 }
 
 #define _car(obj) ((obj)->u.pair.car)
@@ -214,7 +239,9 @@ void gc_collect(scheme_ctx_t *ctx)
 #define is_null(ctx, obj) ((ctx)->NIL == obj)
 #define is_sym(obj) ((obj)->type == CELL_T_SYMBOL)
 #define is_pair(obj) ((obj)->type == CELL_T_PAIR)
-
+#define is_true(ctx, obj) ((obj) != (ctx)->FALSE)
+#define is_false(ctx, obj) ((obj) == (ctx)->FALSE)
+#define is_primop(obj) ((obj)->type == CELL_T_PRIMOP)
 /* symbols */
 
 cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
@@ -237,23 +264,47 @@ cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
 }
 
 /* FIXME */
-cell_t *mk_primop(scheme_ctx_t *ctx, cell_t (*fn)(cell_t *))
+cell_t *mk_primop(scheme_ctx_t *ctx, cell_t *(*fn)(scheme_ctx_t *, cell_t *))
 {
-  return ctx->NIL;
+  cell_t *ret = get_cell(ctx);
+  ret->type = CELL_T_PRIMOP;
+  ret->u.primop = fn;
+  return ret;
+}
+
+cell_t *mk_string(scheme_ctx_t *ctx, char* str)
+{
+  cell_t *ret = get_cell(ctx);
+  ret->type = CELL_T_STRING;
+  ret->u.string = strdup(str);
+  return ret;
 }
 
 /* --- obj --- */
 
 cell_t *mk_object_from_token(scheme_ctx_t *ctx, char *token)
 {
-  return  mk_symbol(ctx, token);
+  cell_t *ret = ctx->NIL;
+  char *c;
+  switch(*token) {
+    case '"':
+      if ((c = strchr(token+1, '"'))) {
+        *c = '\0';
+      }
+      ret = mk_string(ctx, token+1);
+      break;
+    default:
+      ret = mk_symbol(ctx, token);
+      break;
+  }
+  return ret;
 }
 
 cell_t *get_object(scheme_ctx_t *ctx);
 cell_t *get_obj_list(scheme_ctx_t *ctx)
 {
   cell_t *obj = get_object(ctx);
-  if (obj == mk_symbol(ctx, ")")) {
+  if (obj == ctx->PARENTHESIS_CLOSE) {
     return ctx->NIL;
   }
   return cons(ctx, obj, get_obj_list(ctx));
@@ -262,13 +313,11 @@ cell_t *get_obj_list(scheme_ctx_t *ctx)
 cell_t *get_object(scheme_ctx_t *ctx)
 {
   char *value = tokenizer_get_token(&ctx->tokenizer_ctx);
-  if (value) {
-    if (*value == '(') {
-      return get_obj_list(ctx);
-    }
-    return mk_object_from_token(ctx, value);
+  cell_t *obj = mk_object_from_token(ctx, value);
+  if (obj == ctx->PARENTHESIS_OPEN) {
+    return get_obj_list(ctx);
   }
-  return NULL; /* err or end of file XXX */
+  return obj;
 }
 
 /*------------------------ print -------------------- */
@@ -276,7 +325,7 @@ cell_t *get_object(scheme_ctx_t *ctx)
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
 void print_pair(scheme_ctx_t *ctx, cell_t *pair)
 {
-  printf("( ");
+  printf("(");
   while (is_pair(pair)) {
     print_obj(ctx, _car(pair));
     pair = _cdr(pair);
@@ -285,13 +334,19 @@ void print_pair(scheme_ctx_t *ctx, cell_t *pair)
     printf(". ");
     print_obj(ctx, pair);
   }
-  printf(") ");
+  printf(")");
 }
 
 void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
   switch ((obj)->type) {
+    case CELL_T_PRIMOP:
+      printf("<primop> ");
+      break;
     case CELL_T_SYMBOL:
-      printf("<sym:%s> ", obj->u.symbol);
+      printf("%s ", obj->u.symbol);
+      break;
+    case CELL_T_STRING:
+      printf("\"%s\" ", obj->u.string);
       break;
     case CELL_T_PAIR:
       print_pair(ctx, obj);
@@ -299,6 +354,10 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
     default:
       if (is_null(ctx, obj)) {
         printf("()");
+      } else if (is_true(ctx, obj)) {
+        printf("#t ");
+      } else if (is_false(ctx, obj)) {
+        printf("#f ");
       } else {
         printf("<unknown> ");
       }
@@ -306,24 +365,161 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
   }
 }
 
+/* primops */
+
+cell_t *eq(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *ret = ctx->FALSE;
+  cell_t *arg1 = _car(args);
+  cell_t *arg2 = _car(_cdr(args));
+  return (arg1 == arg2) ? ctx->TRUE : ctx->FALSE;
+}
+
+cell_t *eqv(scheme_ctx_t *ctx, cell_t *args)
+{
+  /* XXX */
+  return ctx->FALSE;
+}
+
+cell_t *apply_primop(scheme_ctx_t *ctx, cell_t *primop, cell_t *args)
+{
+  return primop->u.primop(ctx, args);
+}
+
+/* environment hanlding */
+
+cell_t *env_define(scheme_ctx_t *ctx, cell_t *symbol, cell_t *value)
+{
+  ctx->env = cons(ctx, cons(ctx, symbol, cons(ctx, value, ctx->NIL)), ctx->env);
+  return value;
+}
+
+cell_t *env_resolve(scheme_ctx_t *ctx, cell_t *symbol)
+{
+  for (cell_t *e = ctx->env; !is_null(ctx, e); e = _cdr(e)) {
+    if (symbol == _car(_car(e))) {
+      return _car(_cdr(_car(e)));
+    }
+  }
+  printf("ERROR: symbol '%s' is not defined\n", symbol->u.symbol);
+  return ctx->NIL; /* symbol not found in environment */
+}
+
+/* eval */
+
+cell_t *eval(scheme_ctx_t *ctx, cell_t *obj);
+cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
+{
+  if (ctx->NIL == list) {
+    return ctx->NIL;
+  }
+  return cons(ctx, eval(ctx, _car(list)), eval_list(ctx, _cdr(list)));
+}
+
+cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
+{
+  if (!is_pair(obj)) {
+    if (is_sym(obj)) {
+      return env_resolve(ctx, obj);
+    } else {
+      return obj;
+    }
+  } else if (is_sym(_car(obj))) {
+    cell_t *cmd = _car(obj);
+    cell_t *args = _cdr(obj);
+    if (cmd == mk_symbol(ctx, "if")) {
+      /* (if a b c) */
+      cell_t *a = _car(args);
+      cell_t *b = _car(_cdr(args));
+      cell_t *c = _car(_cdr(_cdr(args)));
+      if (is_true(ctx, eval(ctx, a))) {
+        return eval(ctx, b);
+      } else {
+        return eval(ctx, c);
+      }
+    } else if (cmd == mk_symbol(ctx, "define")) {
+      cell_t *name = _car(args);
+      cell_t *value = _car(_cdr(args));
+      if (!is_sym(name)) {
+        printf("define: name is not a symbol\n");
+        return ctx->NIL;
+      } else {
+        return env_define(ctx, name, value);
+      }
+    } else if (cmd == mk_symbol(ctx, "lambda")) {
+      return obj;
+    } else {
+      /* try to resolve symbol */
+      cell_t *resolved_cmd = env_resolve(ctx, cmd);
+      if (is_null(ctx, resolved_cmd)) {
+        /* ERROR */
+        return ctx->NIL;
+      } else if (is_primop(resolved_cmd)) {
+        return apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
+      } else if (is_pair(resolved_cmd)) {
+        return eval(ctx, cons(ctx, resolved_cmd, args));
+      }
+    }
+  } else if(is_pair(_car(obj))){
+    /* lambda? */
+    cell_t *lambda = _car(obj);
+    cell_t *args   = _cdr(obj);
+    if (mk_symbol(ctx, "lambda") == _car(lambda)) {
+      cell_t *old_env = ctx->env; /* XXX */
+      cell_t *old_sink = ctx->sink; /* XXX */
+
+      cell_t *names = _car(_cdr(lambda));
+      cell_t *vars  = args;
+      cell_t *body  = _car(_cdr(_cdr(lambda)));
+
+      for( ;
+          !is_null(ctx, names) && !is_null(ctx, vars);
+          names = _cdr(names), vars = _cdr(vars)) {
+        env_define(ctx, _car(names), eval(ctx, _car(vars)));
+      }
+      cell_t *ret = eval(ctx, body);
+
+      ctx->env = old_env;  /* XXX */
+      ctx->sink = old_sink; /* XXX */
+      return ret;
+    } else {
+      printf("cannot apply");
+    }
+  } else {
+    printf("cannot apply");
+  }
+  return ctx->NIL;
+}
 
 /* ---------------t main .. */
 void scheme_init(scheme_ctx_t *ctx) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->NIL = &ctx->NIL_VALUE;
-  ctx->result = ctx->NIL;
+  ctx->TRUE = &ctx->TRUE_VALUE;
+  ctx->FALSE = &ctx->FALSE_VALUE;
   ctx->sink = ctx->NIL;
   ctx->syms = ctx->NIL;
   ctx->env = ctx->NIL;
+  ctx->code = ctx->NIL;
+  ctx->result = ctx->NIL;
   tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
+  ctx->PARENTHESIS_OPEN = mk_symbol(ctx, "(");
+  ctx->PARENTHESIS_CLOSE = mk_symbol(ctx, ")");
 }
 
 int main()
 {
   scheme_ctx_t ctx;
   scheme_init(&ctx);
-  cell_t *obj = get_object(&ctx);
-  print_obj(&ctx, obj);
-  printf("\n");
+  env_define(&ctx, mk_symbol(&ctx, "#t"), ctx.TRUE);
+  env_define(&ctx, mk_symbol(&ctx, "#f"), ctx.FALSE);
+  env_define(&ctx, mk_symbol(&ctx, "eq"), mk_primop(&ctx, &eq));
+  for(;;) {
+    cell_t *obj = get_object(&ctx);
+    print_obj(&ctx, eval(&ctx, obj));
+    printf("\n");
+    gc_info(&ctx);
+    ctx.sink = ctx.NIL;
+  }
   return 0;
 }
