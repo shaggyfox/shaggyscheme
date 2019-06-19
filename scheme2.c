@@ -314,7 +314,9 @@ cell_t *get_object(scheme_ctx_t *ctx)
 {
   char *value = tokenizer_get_token(&ctx->tokenizer_ctx);
   cell_t *obj = mk_object_from_token(ctx, value);
-  if (obj == ctx->PARENTHESIS_OPEN) {
+  if (obj == mk_symbol(ctx, "'")) {
+    return cons(ctx, mk_symbol(ctx, "quote"), cons(ctx, get_object(ctx), ctx->NIL));
+  } else if (obj == ctx->PARENTHESIS_OPEN) {
     return get_obj_list(ctx);
   }
   return obj;
@@ -444,10 +446,12 @@ cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
         printf("define: name is not a symbol\n");
         return ctx->NIL;
       } else {
-        return env_define(ctx, name, value);
+        return env_define(ctx, name, eval(ctx, value));
       }
     } else if (cmd == mk_symbol(ctx, "lambda")) {
       return obj;
+    } else if (cmd == mk_symbol(ctx, "quote")) {
+      return _car(args);
     } else {
       /* try to resolve symbol */
       cell_t *resolved_cmd = env_resolve(ctx, cmd);
@@ -514,6 +518,9 @@ int main()
   env_define(&ctx, mk_symbol(&ctx, "#t"), ctx.TRUE);
   env_define(&ctx, mk_symbol(&ctx, "#f"), ctx.FALSE);
   env_define(&ctx, mk_symbol(&ctx, "eq"), mk_primop(&ctx, &eq));
+  ctx.sink = ctx.NIL;
+  gc_collect(&ctx);
+  gc_info(&ctx);
   for(;;) {
     cell_t *obj = get_object(&ctx);
     print_obj(&ctx, eval(&ctx, obj));
