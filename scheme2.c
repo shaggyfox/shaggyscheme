@@ -236,7 +236,6 @@ void gc_collect(scheme_ctx_t *ctx)
         ctx->memory[i].flags &= ~CELL_F_USED;
         memset(&ctx->memory[i], 0, sizeof(ctx->memory[i]));
         ++ collected;
-        
       }
     }
   }
@@ -244,9 +243,11 @@ void gc_collect(scheme_ctx_t *ctx)
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
   unmark_cells(ctx->args);
+#if GC_DEBUG
   if (collected) {
     printf("DEBUG: gc collect %d cells\n", collected);
   }
+#endif
 }
 
 void gc_info(scheme_ctx_t *ctx)
@@ -442,7 +443,8 @@ static int get_args(cell_t *args, int nr, int types[], cell_t *ret[])
     cell_t *obj = _car(args);
     if (obj->type != types[i]) {
       if (types[i] != CELL_T_EMPTY) {
-        printf("ERROR: %s expected %s given\n", get_type_name(types[i]), get_type_name(obj->type));
+        printf("ERROR: %s expected %s given\n",
+            get_type_name(types[i]), get_type_name(obj->type));
         return -1;
       }
     }
@@ -456,7 +458,8 @@ static int get_args(cell_t *args, int nr, int types[], cell_t *ret[])
     args = _cdr(args);
   }
   if (to_many_args) {
-    printf("ERROR: to many arguments %d expected %d given\n", nr, nr + to_many_args);
+    printf("ERROR: to many arguments %d expected %d given\n",
+        nr, nr + to_many_args);
     return -1;
   }
   return 0;
@@ -486,7 +489,11 @@ static void plus_cb(int *ret, int in) { *ret += in; }
 static void minus_cb(int *ret, int in) { *ret -= in; }
 static void mul_cb(int *ret, int in) { *ret *= in; }
 static void div_cb(int *ret, int in) { *ret /= in; }
-cell_t *do_integer_math(scheme_ctx_t *ctx, cell_t *args, void (*cb)(int *ret, int in))
+
+cell_t *do_integer_math(
+    scheme_ctx_t *ctx,
+    cell_t *args,
+    void (*cb)(int *ret, int in))
 {
   int ret = 0;
   int i = 0;
@@ -507,10 +514,19 @@ cell_t *do_integer_math(scheme_ctx_t *ctx, cell_t *args, void (*cb)(int *ret, in
   return mk_integer(ctx, ret);
 }
 
-cell_t *op_minus(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, minus_cb); }
-cell_t *op_plus(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, plus_cb); }
-cell_t *op_mul(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, mul_cb); }
-cell_t *op_div(scheme_ctx_t *ctx, cell_t *args) { return do_integer_math(ctx, args, div_cb); }
+
+cell_t *op_minus(scheme_ctx_t *ctx, cell_t *args) {
+  return do_integer_math(ctx, args, minus_cb);
+}
+cell_t *op_plus(scheme_ctx_t *ctx, cell_t *args) {
+  return do_integer_math(ctx, args, plus_cb);
+}
+cell_t *op_mul(scheme_ctx_t *ctx, cell_t *args) {
+  return do_integer_math(ctx, args, mul_cb);
+}
+cell_t *op_div(scheme_ctx_t *ctx, cell_t *args) {
+  return do_integer_math(ctx, args, div_cb);
+}
 
 cell_t *display(scheme_ctx_t *ctx, cell_t *args)
 {
@@ -587,7 +603,10 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   }
   return cons(ctx, eval(ctx, _car(list)), eval_list(ctx, _cdr(list)));
 }
-cell_t *eval_ex(scheme_ctx_t *ctx, cell_t *obj, cell_t *last_lambda, cell_t **tail_recursion_args);
+cell_t *eval_ex(scheme_ctx_t *ctx,
+    cell_t *obj,
+    cell_t *last_lambda,
+    cell_t **tail_recursion_args);
 
 cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
 {
@@ -655,7 +674,8 @@ cell_t *eval_ex(
       } else if (is_primop(resolved_cmd)) {
         return apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
       } else if (is_pair(resolved_cmd)) {
-        return eval_ex(ctx, cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
+        return eval_ex(ctx,
+            cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
       }
     }
   } else if(is_pair(_car(obj))){
@@ -747,7 +767,7 @@ int main()
   ctx.sink = ctx.NIL;
   gc_collect(&ctx);
   gc_info(&ctx);
- 
+
   cell_t *obj;
   while((obj = get_object(&ctx))) {
     print_obj(&ctx, eval(&ctx, obj));
