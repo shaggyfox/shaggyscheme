@@ -216,6 +216,7 @@ void gc_collect(scheme_ctx_t *ctx)
   mark_cells(ctx->syms);
   mark_cells(ctx->env);
   mark_cells(ctx->args);
+  mark_cells(ctx->result);
 
 
 #if 0
@@ -243,6 +244,7 @@ void gc_collect(scheme_ctx_t *ctx)
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
   unmark_cells(ctx->args);
+  unmark_cells(ctx->result);
 #if GC_DEBUG
   if (collected) {
     printf("DEBUG: gc collect %d cells\n", collected);
@@ -525,6 +527,42 @@ cell_t *op_div(scheme_ctx_t *ctx, cell_t *args) {
   return do_integer_math(ctx, args, div_cb);
 }
 
+cell_t *op_gt(scheme_ctx_t *ctx, cell_t *args) {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return arg[0]->u.integer > arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
+}
+
+cell_t *op_gt_eq(scheme_ctx_t *ctx, cell_t *args) {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return arg[0]->u.integer >= arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
+}
+
+cell_t *op_lt(scheme_ctx_t *ctx, cell_t *args) {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return arg[0]->u.integer < arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
+}
+
+cell_t *op_lt_eq(scheme_ctx_t *ctx, cell_t *args) {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return arg[0]->u.integer <= arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
+}
+
 cell_t *display(scheme_ctx_t *ctx, cell_t *args)
 {
   cell_t *arg_array[1];
@@ -616,14 +654,16 @@ cell_t *eval_ex(
     cell_t       *last_lambda,
     cell_t      **tail_recursion_args)
 {
+  cell_t *old_sink = ctx->sink; /* XXX */
+
+  cell_t *ret = ctx->NIL;
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
-    return ctx->NIL;
   } else if (!is_pair(obj)) {
     if (is_sym(obj)) {
-      return env_resolve(ctx, obj);
+      ret = env_resolve(ctx, obj);
     } else {
-      return obj;
+      ret = obj;
     }
   } else if (is_sym(_car(obj))) {
     cell_t *cmd = _car(obj);
@@ -634,25 +674,23 @@ cell_t *eval_ex(
       cell_t *b = _car(_cdr(args));
       cell_t *c = _car(_cdr(_cdr(args)));
       if (is_true(ctx, eval(ctx, a))) {
-        return eval_ex(ctx, b, last_lambda, tail_recursion_args);
+        ret = eval_ex(ctx, b, last_lambda, tail_recursion_args);
       } else {
-        return eval_ex(ctx, c, last_lambda, tail_recursion_args);
+        ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
       }
     } else if (cmd == mk_symbol(ctx, "define")) {
       cell_t *name = _car(args);
       cell_t *value = _car(_cdr(args));
       if (!is_sym(name)) {
         printf("define: name is not a symbol\n");
-        return ctx->NIL;
       } else {
-        return env_define(ctx, name, eval(ctx, value));
+        ret = env_define(ctx, name, eval(ctx, value));
       }
     } else if (cmd == mk_symbol(ctx, "lambda")) {
-      return obj;
+      ret = obj;
     } else if (cmd == mk_symbol(ctx, "quote")) {
-      return _car(args);
+      ret = _car(args);
     } else if (cmd == mk_symbol(ctx, "begin")) {
-      cell_t *ret = ctx->NIL;
       while( !is_null(ctx, args)) {
         if (is_null(ctx, _cdr(args))) {
           ret = eval_ex(ctx, _car(args), last_lambda, tail_recursion_args);
@@ -661,17 +699,15 @@ cell_t *eval_ex(
         }
         args = _cdr(args);
       }
-      return ret;
     } else {
       /* try to resolve symbol */
       cell_t *resolved_cmd = env_resolve(ctx, cmd);
       if (is_null(ctx, resolved_cmd)) {
         /* ERROR */
-        return ctx->NIL;
       } else if (is_primop(resolved_cmd)) {
-        return apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
+        ret = apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
       } else if (is_pair(resolved_cmd)) {
-        return eval_ex(ctx,
+        ret = eval_ex(ctx,
             cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
       }
     }
@@ -684,17 +720,14 @@ cell_t *eval_ex(
         /* TAIL RECURSION: */
         /* evaluate arguments and return to caller */
         *tail_recursion_args = eval_list(ctx, args);
-
         return ctx->NIL;
       }
       cell_t *old_env = ctx->env; /* XXX */
       cell_t *old_sink = ctx->sink; /* XXX */
-
       cell_t *names = _car(_cdr(lambda));
       cell_t *vars  = args;
       cell_t *body  = _car(_cdr(_cdr(lambda)));
       cell_t *rec;
-      cell_t *ret;
 
       do {
         rec = NULL;
@@ -706,25 +739,26 @@ cell_t *eval_ex(
         }
         ret = eval_ex(ctx, body, lambda, &rec);
         if (rec) {
+          /* TAIL RECURSION */
           names = _car(_cdr(lambda));
           vars = rec;
           ctx->args = vars; /* for gc */
-
+          ctx->result = ret; /* for gc */
         } else {
           ctx->args = ctx->NIL;
         }
-
         ctx->env = old_env;  /* XXX */
         ctx->sink = old_sink; /* XXX */
       } while(rec);
-      return ret;
     } else {
       printf("cannot apply");
     }
   } else {
     printf("cannot apply");
   }
-  return ctx->NIL;
+  ctx->sink = old_sink; /* XXX */
+  ctx->result = ret; /* keep result from being GCed */
+  return ret;
 }
 
 /* ---------------t main .. */
@@ -761,6 +795,12 @@ int main()
   env_define(&ctx, mk_symbol(&ctx, "-"), mk_primop(&ctx, &op_minus));
   env_define(&ctx, mk_symbol(&ctx, "*"), mk_primop(&ctx, &op_mul));
   env_define(&ctx, mk_symbol(&ctx, "/"), mk_primop(&ctx, &op_div));
+
+
+  env_define(&ctx, mk_symbol(&ctx, ">"), mk_primop(&ctx, &op_gt));
+  env_define(&ctx, mk_symbol(&ctx, "<"), mk_primop(&ctx, &op_lt));
+  env_define(&ctx, mk_symbol(&ctx, ">="), mk_primop(&ctx, &op_gt_eq));
+  env_define(&ctx, mk_symbol(&ctx, "<="), mk_primop(&ctx, &op_lt_eq));
   ctx.sink = ctx.NIL;
   gc_collect(&ctx);
   gc_info(&ctx);
