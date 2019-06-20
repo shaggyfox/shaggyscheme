@@ -56,15 +56,22 @@ void tokenizer_init(tokenizer_ctx_t *ctx, char (*get_char)(void*), void *data)
   ctx->look_ahead = ' ';
 }
 
-#define is_whitespace(x) ((x) == ' ' || (x) == '\n')
-#define is_special(x) ((x) == '(' || (x) == ')' || (x) == '\'' || (x) == '.')
+#define is_whitespace(x) ((x) == ' ' || (x) == '\n' || (x) == ';')
+#define is_special(x) ((x) == '(' || (x) == ')' || (x) == '\'' || (x) == '.' )
 #define is_qoute(x)
 
 char *tokenizer_get_token(tokenizer_ctx_t *ctx)
 {
   /* skip whitespace */
   while(is_whitespace(ctx->look_ahead)) {
-    ctx->look_ahead = ctx->get_char(ctx->get_char_data);
+    /* skip commentary */
+    if (ctx->look_ahead == ';') {
+      while(ctx->look_ahead != '\n' || ctx->look_ahead == 0) {
+        ctx->look_ahead = ctx->get_char(ctx->get_char_data);
+      }
+    } else {
+      ctx->look_ahead = ctx->get_char(ctx->get_char_data);
+    }
   }
 
   do {
@@ -656,7 +663,9 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   if (ctx->NIL == list) {
     return ctx->NIL;
   }
-  return cons(ctx, eval(ctx, _car(list)), eval_list(ctx, _cdr(list)));
+  /* XXX the result of eval is not in sink ... only in ctx->result but
+   * this will be overwritten by any other eval */
+  return cons(ctx, add_to_sink(ctx, eval(ctx, _car(list))), eval_list(ctx, _cdr(list)));
 }
 
 cell_t *eval_ex(scheme_ctx_t *ctx,
@@ -676,6 +685,7 @@ cell_t *eval_ex(
     cell_t      **tail_recursion_args)
 {
   cell_t *ret = ctx->NIL;
+  cell_t *old_sink = ctx->sink;
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
   } else if (!is_pair(obj)) {
@@ -742,7 +752,7 @@ cell_t *eval_ex(
         return ctx->NIL;
       }
       cell_t *old_env = ctx->env; /* XXX */
-      cell_t *old_sink = ctx->sink; /* XXX */
+      //cell_t *old_sink = ctx->sink; /* XXX */
       cell_t *names = _car(_cdr(lambda));
       cell_t *vars  = args;
       cell_t *body  = _car(_cdr(_cdr(lambda)));
@@ -780,6 +790,7 @@ cell_t *eval_ex(
     printf("cannot apply\n");
   }
   ctx->result = ret; /* keep result from being GCed */
+  ctx->sink = old_sink;
   return ret;
 }
 
