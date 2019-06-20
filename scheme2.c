@@ -18,11 +18,31 @@ typedef struct tokenizer_ctx_s tokenizer_ctx_t;
 
 char default_get_char(void *data)
 {
-  int v = getchar();
+  int v;
+  if (data) {
+    v = getc((FILE*) data);
+  } else {
+    v = getchar();
+  }
   if (v == EOF) {
     return 0;
   }
   return (char)v;
+}
+
+struct memory_get_char_data_s {
+  char *memory;
+  int len;
+  int pos;
+};
+
+char memory_get_char(void *in_data)
+{
+  struct memory_get_char_data_s *data = in_data;
+  if (data->pos >= data->len) {
+    return '\0';
+  }
+  return data->memory[data->pos ++];
 }
 
 void tokenizer_init(tokenizer_ctx_t *ctx, char (*get_char)(void*), void *data)
@@ -638,6 +658,7 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   }
   return cons(ctx, eval(ctx, _car(list)), eval_list(ctx, _cdr(list)));
 }
+
 cell_t *eval_ex(scheme_ctx_t *ctx,
     cell_t *obj,
     cell_t *last_lambda,
@@ -654,8 +675,6 @@ cell_t *eval_ex(
     cell_t       *last_lambda,
     cell_t      **tail_recursion_args)
 {
-  cell_t *old_sink = ctx->sink; /* XXX */
-
   cell_t *ret = ctx->NIL;
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
@@ -727,16 +746,20 @@ cell_t *eval_ex(
       cell_t *names = _car(_cdr(lambda));
       cell_t *vars  = args;
       cell_t *body  = _car(_cdr(_cdr(lambda)));
-      cell_t *rec;
+      cell_t *rec = NULL;
 
       do {
-        rec = NULL;
-
         for( ;
             !is_null(ctx, names) && !is_null(ctx, vars);
             names = _cdr(names), vars = _cdr(vars)) {
-          env_define(ctx, _car(names), eval(ctx, _car(vars)));
+          /* when in TAIL RECURSION arguments are already evaluated ... */
+          if (rec) {
+            env_define(ctx, _car(names), _car(vars));
+          } else {
+            env_define(ctx, _car(names), eval(ctx, _car(vars)));
+          }
         }
+        rec = NULL;
         ret = eval_ex(ctx, body, lambda, &rec);
         if (rec) {
           /* TAIL RECURSION */
@@ -751,12 +774,11 @@ cell_t *eval_ex(
         ctx->sink = old_sink; /* XXX */
       } while(rec);
     } else {
-      printf("cannot apply");
+      printf("cannot apply\n");
     }
   } else {
-    printf("cannot apply");
+    printf("cannot apply\n");
   }
-  ctx->sink = old_sink; /* XXX */
   ctx->result = ret; /* keep result from being GCed */
   return ret;
 }
@@ -773,45 +795,86 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->code = ctx->NIL;
   ctx->result = ctx->NIL;
   ctx->args = ctx->NIL;
+  /* init tokenizer for stdin */
   tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
+
   ctx->PARENTHESIS_OPEN = mk_symbol(ctx, "(");
   ctx->PARENTHESIS_CLOSE = mk_symbol(ctx, ")");
+
+  env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
+  env_define(ctx, mk_symbol(ctx, "#f"), ctx->FALSE);
+  env_define(ctx, mk_symbol(ctx, "eq?"), mk_primop(ctx, &eq));
+  env_define(ctx, mk_symbol(ctx, "display"), mk_primop(ctx, &display));
+  env_define(ctx, mk_symbol(ctx, "newline"), mk_primop(ctx, &newline));
+  env_define(ctx, mk_symbol(ctx, "cons"), mk_primop(ctx, &primop_cons));
+  env_define(ctx, mk_symbol(ctx, "car"), mk_primop(ctx, &car));
+  env_define(ctx, mk_symbol(ctx, "cdr"), mk_primop(ctx, &cdr));
+
+  env_define(ctx, mk_symbol(ctx, "+"), mk_primop(ctx, &op_plus));
+  env_define(ctx, mk_symbol(ctx, "-"), mk_primop(ctx, &op_minus));
+  env_define(ctx, mk_symbol(ctx, "*"), mk_primop(ctx, &op_mul));
+  env_define(ctx, mk_symbol(ctx, "/"), mk_primop(ctx, &op_div));
+
+  env_define(ctx, mk_symbol(ctx, ">"), mk_primop(ctx, &op_gt));
+  env_define(ctx, mk_symbol(ctx, "<"), mk_primop(ctx, &op_lt));
+  env_define(ctx, mk_symbol(ctx, ">="), mk_primop(ctx, &op_gt_eq));
+  env_define(ctx, mk_symbol(ctx, "<="), mk_primop(ctx, &op_lt_eq));
+  ctx->sink = ctx->NIL;
+  gc_collect(ctx);
+  /* debug output */
+  gc_info(ctx);
 }
 
-int main()
+void scheme_load_memory(scheme_ctx_t *ctx, char *memory, size_t len)
+{
+  struct memory_get_char_data_s data;
+  data.len = len;
+  data.pos = 0;
+  data.memory = memory;
+  tokenizer_init(&ctx->tokenizer_ctx, memory_get_char, &data);
+  cell_t *old_sink = ctx->sink;
+  for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
+    eval(ctx, obj);
+    ctx->sink = old_sink;
+  }
+}
+
+void scheme_load_file(scheme_ctx_t *ctx, char *filename)
+{
+  FILE *fd = fopen(filename, "r");
+  if (!fd) {
+    printf("error open file\n");
+    return;
+  }
+  tokenizer_init(&ctx->tokenizer_ctx, default_get_char, fd);
+
+  cell_t *old_sink = ctx->sink;
+  for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
+    eval(ctx, obj);
+    ctx->sink = old_sink;
+  }
+  fclose(fd);
+}
+
+int main(int argc, char *argv[])
 {
   scheme_ctx_t ctx;
   scheme_init(&ctx);
-  env_define(&ctx, mk_symbol(&ctx, "#t"), ctx.TRUE);
-  env_define(&ctx, mk_symbol(&ctx, "#f"), ctx.FALSE);
-  env_define(&ctx, mk_symbol(&ctx, "eq?"), mk_primop(&ctx, &eq));
-  env_define(&ctx, mk_symbol(&ctx, "display"), mk_primop(&ctx, &display));
-  env_define(&ctx, mk_symbol(&ctx, "newline"), mk_primop(&ctx, &newline));
-  env_define(&ctx, mk_symbol(&ctx, "cons"), mk_primop(&ctx, &primop_cons));
-  env_define(&ctx, mk_symbol(&ctx, "car"), mk_primop(&ctx, &car));
-  env_define(&ctx, mk_symbol(&ctx, "cdr"), mk_primop(&ctx, &cdr));
 
-  env_define(&ctx, mk_symbol(&ctx, "+"), mk_primop(&ctx, &op_plus));
-  env_define(&ctx, mk_symbol(&ctx, "-"), mk_primop(&ctx, &op_minus));
-  env_define(&ctx, mk_symbol(&ctx, "*"), mk_primop(&ctx, &op_mul));
-  env_define(&ctx, mk_symbol(&ctx, "/"), mk_primop(&ctx, &op_div));
+  if (argc == 2) {
+    scheme_load_file(&ctx, argv[1]);
+  } else {
+    cell_t *obj;
+    while((obj = get_object(&ctx))) {
+      print_obj(&ctx, eval(&ctx, obj));
+      printf("\n");
+      ctx.sink = ctx.NIL;
+    }
+  }
 
-
-  env_define(&ctx, mk_symbol(&ctx, ">"), mk_primop(&ctx, &op_gt));
-  env_define(&ctx, mk_symbol(&ctx, "<"), mk_primop(&ctx, &op_lt));
-  env_define(&ctx, mk_symbol(&ctx, ">="), mk_primop(&ctx, &op_gt_eq));
-  env_define(&ctx, mk_symbol(&ctx, "<="), mk_primop(&ctx, &op_lt_eq));
-  ctx.sink = ctx.NIL;
-  gc_collect(&ctx);
-  gc_info(&ctx);
-
-  cell_t *obj;
-  while((obj = get_object(&ctx))) {
-    print_obj(&ctx, eval(&ctx, obj));
-    printf("\n");
-    /* debug stuff */
-#ifdef DEBUG
-    gc_info(&ctx);
+#if 0
+  char *str = "(display (+ 1 1)) (newline)";
+  scheme_load_memory(&ctx, str, strlen(str));
     for (cell_t *t = ctx.sink; is_pair(t); t = _cdr(t)) {
       printf("sink: %s ", get_type_name(_car(t)->type));
       if (is_sym(_car(t))) {
@@ -820,7 +883,5 @@ int main()
       printf("\n");
     }
 #endif
-    ctx.sink = ctx.NIL;
-  }
   return 0;
 }
