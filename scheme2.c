@@ -622,6 +622,26 @@ cell_t *eq(scheme_ctx_t *ctx, cell_t *args)
   return (arg[0] == arg[1]) ? ctx->TRUE : ctx->FALSE;
 }
 
+cell_t *integer_eq(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return arg[0]->u.integer == arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
+}
+
+cell_t *modulo(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[2];
+  int types[2] = {CELL_T_INTEGER, CELL_T_INTEGER};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  return mk_integer(ctx, arg[0]->u.integer % arg[1]->u.integer);
+}
+
 cell_t *eqv(scheme_ctx_t *ctx, cell_t *args)
 {
   return ctx->FALSE;
@@ -846,7 +866,9 @@ void scheme_init(scheme_ctx_t *ctx) {
   env_define(ctx, mk_symbol(ctx, "-"), mk_primop(ctx, &op_minus));
   env_define(ctx, mk_symbol(ctx, "*"), mk_primop(ctx, &op_mul));
   env_define(ctx, mk_symbol(ctx, "/"), mk_primop(ctx, &op_div));
+  env_define(ctx, mk_symbol(ctx, "modulo"), mk_primop(ctx, &modulo));
 
+  env_define(ctx, mk_symbol(ctx, "="), mk_primop(ctx, &integer_eq));
   env_define(ctx, mk_symbol(ctx, ">"), mk_primop(ctx, &op_gt));
   env_define(ctx, mk_symbol(ctx, "<"), mk_primop(ctx, &op_lt));
   env_define(ctx, mk_symbol(ctx, ">="), mk_primop(ctx, &op_gt_eq));
