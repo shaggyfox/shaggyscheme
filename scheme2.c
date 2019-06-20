@@ -355,8 +355,14 @@ cell_t *mk_object_from_token(scheme_ctx_t *ctx, char *token)
       ret = mk_string(ctx, token+1);
       break;
     default:
-      if (strlen(token) == strspn(token, "0123456789")) {
-        ret = mk_integer(ctx, strtol(token, NULL, 10));
+      if (strlen(token) == strspn(token, "-0123456789")) {
+        char *rest = NULL;
+        int v = strtol(token, &rest, 10);
+        if (*rest == '\0') {
+          ret = mk_integer(ctx, v);
+        } else {
+          ret = mk_symbol(ctx, token);
+        }
       } else {
         ret = mk_symbol(ctx, token);
       }
@@ -626,6 +632,20 @@ cell_t *apply_primop(scheme_ctx_t *ctx, cell_t *primop, cell_t *args)
   return primop->u.primop(ctx, args);
 }
 
+cell_t *primop_length(scheme_ctx_t *ctx, cell_t *args)
+{
+  int ret = 0;
+  cell_t *arg[1];
+  int types[1] = {CELL_T_EMPTY};
+  if (get_args(args, 1, types, arg)) {
+    return ctx->NIL;
+  }
+  for(cell_t *c = arg[0]; is_pair(c); c = _cdr(c)) {
+    ++ret;
+  }
+  return mk_integer(ctx, ret);
+}
+
 cell_t *primop_cons(scheme_ctx_t *ctx, cell_t *args)
 {
   cell_t *arg[2];
@@ -818,6 +838,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   env_define(ctx, mk_symbol(ctx, "display"), mk_primop(ctx, &display));
   env_define(ctx, mk_symbol(ctx, "newline"), mk_primop(ctx, &newline));
   env_define(ctx, mk_symbol(ctx, "cons"), mk_primop(ctx, &primop_cons));
+  env_define(ctx, mk_symbol(ctx, "length"), mk_primop(ctx, &primop_length));
   env_define(ctx, mk_symbol(ctx, "car"), mk_primop(ctx, &car));
   env_define(ctx, mk_symbol(ctx, "cdr"), mk_primop(ctx, &cdr));
 
