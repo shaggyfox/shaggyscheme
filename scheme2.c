@@ -122,10 +122,10 @@ typedef struct cell_s cell_t;
 
 enum cell_type_e {
   CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL,
-  CELL_T_INTEGER, CELL_T_PRIMOP};
+  CELL_T_INTEGER, CELL_T_PRIMOP, CELL_T_LAMBDA};
 
 static char *cell_type_names[] = {
-  "empty", "pair", "string", "symbol", "integer", "primop", NULL
+  "empty", "pair", "string", "symbol", "integer", "primop", "lambda", NULL
 };
 
 struct cell_s {
@@ -142,10 +142,14 @@ struct cell_s {
     char *symbol;
     int integer;
     cell_t *(*primop)(scheme_ctx_t *, cell_t *);
+    struct {
+      cell_t *names;
+      cell_t *body;
+    } lambda;
   } u;
 };
 
-#define MAX_MEMORY (1024 * 4)
+#define MAX_MEMORY (1024)
 struct scheme_ctx_s {
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
@@ -232,12 +236,18 @@ void mark_cells(cell_t *cell)
     /* cell ist already marked */
     return;
   }
+  /* mark this cell */
+  mark_cell(cell);
   switch(cell->type) {
     case CELL_T_PAIR:
       mark_cells(cell->u.pair.car);
       mark_cells(cell->u.pair.cdr);
+      break;
+    case CELL_T_LAMBDA:
+      mark_cells(cell->u.lambda.names);
+      mark_cells(cell->u.lambda.body);
+      break;
     default:
-      mark_cell(cell);
       break;
   }
 }
@@ -247,12 +257,17 @@ void unmark_cells(cell_t *cell)
   if (!(cell->flags & CELL_F_MARK)) {
      return;
   }
+  unmark_cell(cell);
   switch(cell->type) {
     case CELL_T_PAIR:
       unmark_cells(cell->u.pair.car);
       unmark_cells(cell->u.pair.cdr);
+      break;
+    case CELL_T_LAMBDA:
+      unmark_cells(cell->u.lambda.names);
+      unmark_cells(cell->u.lambda.body);
+      break;
     default:
-      unmark_cell(cell);
       break;
   }
 }
@@ -325,6 +340,7 @@ void gc_info(scheme_ctx_t *ctx)
 #define is_true(ctx, obj) ((obj) != (ctx)->FALSE)
 #define is_false(ctx, obj) ((obj) == (ctx)->FALSE)
 #define is_primop(obj) ((obj)->type == CELL_T_PRIMOP)
+#define is_lambda(obj) ((obj)->type == CELL_T_LAMBDA)
 /* symbols */
 
 cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
@@ -364,6 +380,15 @@ cell_t *mk_integer(scheme_ctx_t *ctx, int integer)
   cell_t *ret = get_cell(ctx);
   ret->type = CELL_T_INTEGER;
   ret->u.integer = integer;
+  return ret;
+}
+
+cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
+{
+  cell_t *ret = get_cell(ctx);
+  ret->type = CELL_T_LAMBDA;
+  ret->u.lambda.names = _car(lambda); /* XXX arg 1 */
+  ret->u.lambda.body = _car(_cdr(lambda)); /* XXX arg 2 */
   return ret;
 }
 
@@ -467,6 +492,9 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       break;
     case CELL_T_INTEGER:
       printf("%i ", obj->u.integer);
+      break;
+    case CELL_T_LAMBDA:
+      printf("<lambda>");
       break;
     default:
       if (is_null(ctx, obj)) {
@@ -794,7 +822,7 @@ cell_t *eval_ex(
         ret = env_define(ctx, name, eval(ctx, value));
       }
     } else if (cmd == mk_symbol(ctx, "lambda")) {
-      ret = obj;
+      ret = mk_lambda(ctx, args);
     } else if (cmd == mk_symbol(ctx, "quote")) {
       ret = _car(args);
     } else if (cmd == mk_symbol(ctx, "begin")) {
@@ -813,56 +841,57 @@ cell_t *eval_ex(
         /* ERROR */
       } else if (is_primop(resolved_cmd)) {
         ret = apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
-      } else if (is_pair(resolved_cmd)) {
+      } else if (is_lambda(resolved_cmd)) {
         ret = eval_ex(ctx,
             cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
       }
     }
-  } else if(is_pair(_car(obj))){
-    /* lambda? */
+  } else if(is_pair(_car(obj))) {
+    ret = eval_ex (ctx, _car(obj), last_lambda, tail_recursion_args);
+    if (is_lambda(ret)) {
+      ret = eval_ex(ctx, cons(ctx, ret, _cdr(obj)), last_lambda, tail_recursion_args);
+    }
+  } else if(is_lambda(_car(obj))){
+    /* lambda */
     cell_t *lambda = _car(obj);
     cell_t *args   = _cdr(obj);
-    if (mk_symbol(ctx, "lambda") == _car(lambda)) {
-      if (lambda == last_lambda && tail_recursion_args) {
-        /* TAIL RECURSION: */
-        /* evaluate arguments and return to caller */
-        *tail_recursion_args = eval_list(ctx, args);
-        ctx->sink = old_sink; /*XXX  */
-        return ctx->NIL;
-      }
-      cell_t *names = _car(_cdr(lambda));
-      cell_t *vars  = args;
-      cell_t *body  = _car(_cdr(_cdr(lambda)));
-      cell_t *rec = NULL;
-
-      do {
-        for( ;
-            !is_null(ctx, names) && !is_null(ctx, vars);
-            names = _cdr(names), vars = _cdr(vars)) {
-          /* when in TAIL RECURSION arguments are already evaluated ... */
-          if (rec) {
-            env_define(ctx, _car(names), _car(vars));
-          } else {
-            env_define(ctx, _car(names), eval(ctx, _car(vars)));
-          }
-        }
-        rec = NULL;
-        ret = eval_ex(ctx, body, lambda, &rec);
-        if (rec) {
-          /* TAIL RECURSION */
-          names = _car(_cdr(lambda));
-          vars = rec;
-          ctx->args = vars; /* for gc */
-          ctx->result = ret; /* for gc */
-        } else {
-          ctx->args = ctx->NIL;
-        }
-        ctx->env = old_env;  /* XXX */
-        ctx->sink = old_sink; /* XXX */
-      } while(rec);
-    } else {
-      printf("cannot apply\n");
+    if (lambda == last_lambda && tail_recursion_args) {
+      /* TAIL RECURSION: */
+      /* evaluate arguments and return to caller */
+      *tail_recursion_args = eval_list(ctx, args);
+      ctx->sink = old_sink; /*XXX  */
+      return ctx->NIL;
     }
+    cell_t *rec = NULL;
+    cell_t *vars  = args;
+
+    do {
+      cell_t *names = lambda->u.lambda.names;
+      cell_t *body  = lambda->u.lambda.body;
+      for( ;
+          !is_null(ctx, names) && !is_null(ctx, vars);
+          names = _cdr(names), vars = _cdr(vars)) {
+        /* when in TAIL RECURSION arguments are already evaluated ... */
+        if (rec) {
+          env_define(ctx, _car(names), _car(vars));
+        } else {
+          env_define(ctx, _car(names), eval(ctx, _car(vars)));
+        }
+      }
+      rec = NULL;
+      ret = eval_ex(ctx, body, lambda, &rec);
+      if (rec) {
+        /* TAIL RECURSION */
+      //  names = _car(_cdr(lambda));
+        vars = rec;
+        ctx->args = vars; /* for gc */
+        ctx->result = ret; /* for gc */
+      } else {
+        ctx->args = ctx->NIL;
+      }
+      ctx->env = old_env;  /* XXX */
+      ctx->sink = old_sink; /* XXX */
+    } while(rec);
   } else {
     printf("cannot apply\n");
   }
