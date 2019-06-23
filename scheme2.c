@@ -781,7 +781,6 @@ cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
 {
   return eval_ex(ctx, obj, NULL, NULL);
 }
-
 cell_t *eval_ex(
     scheme_ctx_t *ctx,
     cell_t       *obj,
@@ -805,21 +804,29 @@ cell_t *eval_ex(
     cell_t *args = _cdr(obj);
     if (cmd == mk_symbol(ctx, "if")) {
       /* (if a b c) */
-      cell_t *a = _car(args);
-      cell_t *b = _car(_cdr(args));
-      cell_t *c = _car(_cdr(_cdr(args)));
-      if (is_true(ctx, eval(ctx, a))) {
-        ret = eval_ex(ctx, b, last_lambda, tail_recursion_args);
+      if (list_length(args) != 3) {
+        printf("ERROR if requires 3 arguments\n");
       } else {
-        ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
+        cell_t *a = _car(args);
+        cell_t *b = _car(_cdr(args));
+        cell_t *c = _car(_cdr(_cdr(args)));
+        if (is_true(ctx, eval(ctx, a))) {
+          ret = eval_ex(ctx, b, last_lambda, tail_recursion_args);
+        } else {
+          ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
+        }
       }
     } else if (cmd == mk_symbol(ctx, "define")) {
-      cell_t *name = _car(args);
-      cell_t *value = _car(_cdr(args));
-      if (!is_sym(name)) {
-        printf("define: name is not a symbol\n");
+      if (list_length(args) != 2) {
+        printf("ERROR: define requites 2 arguments\n");
       } else {
-        ret = env_define(ctx, name, eval(ctx, value));
+        cell_t *name = _car(args);
+        cell_t *value = _car(_cdr(args));
+        if (!is_sym(name)) {
+          printf("define: name is not a symbol\n");
+        } else {
+          ret = env_define(ctx, name, eval(ctx, value));
+        }
       }
     } else if (cmd == mk_symbol(ctx, "lambda")) {
       ret = mk_lambda(ctx, args);
@@ -894,6 +901,8 @@ cell_t *eval_ex(
     } while(rec);
   } else {
     printf("cannot apply\n");
+    print_obj(ctx, obj);
+    printf("\n");
   }
   ctx->result = ret; /* keep result from being GCed */
   ctx->sink = old_sink;
