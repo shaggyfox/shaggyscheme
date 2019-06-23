@@ -149,7 +149,7 @@ struct cell_s {
   } u;
 };
 
-#define MAX_MEMORY (1024)
+#define MAX_MEMORY (1024 * 4)
 struct scheme_ctx_s {
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
