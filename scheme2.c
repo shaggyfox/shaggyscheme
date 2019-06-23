@@ -169,6 +169,13 @@ struct scheme_ctx_s {
   tokenizer_ctx_t tokenizer_ctx;
   cell_t *PARENTHESIS_OPEN;
   cell_t *PARENTHESIS_CLOSE;
+  cell_t *SYMBOL_IF;
+  cell_t *SYMBOL_BEGIN;
+  cell_t *SYMBOL_QUOTE;
+  cell_t *SYMBOL_LAMBDA;
+  cell_t *SYMBOL_DEFINE;
+  cell_t *SYMBOL_DOT;
+  cell_t *SYMBOL_QUOTE_ALIAS;
 };
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
@@ -429,13 +436,13 @@ cell_t *get_obj_list(scheme_ctx_t *ctx)
   if (obj == ctx->PARENTHESIS_CLOSE) {
     return ctx->NIL;
   }
-  if (obj == mk_symbol(ctx, ".")) {
+  if (obj == ctx->SYMBOL_DOT) {
     cell_t *ret = get_object(ctx);
-    if (mk_symbol(ctx, ")") == ret) {
+    if (ctx->PARENTHESIS_CLOSE == ret) {
       /* error */
       printf("unexpected ')'\n");
       return ctx->NIL;
-    }else if (mk_symbol(ctx, ")") != get_object(ctx)) {
+    } else if (ctx->PARENTHESIS_CLOSE != get_object(ctx)) {
       printf("expect ')'!\n");
       return ctx->NIL;
     }
@@ -451,8 +458,8 @@ cell_t *get_object(scheme_ctx_t *ctx)
     return NULL; /* eof */
   }
   cell_t *obj = mk_object_from_token(ctx, value);
-  if (obj == mk_symbol(ctx, "'")) {
-    return cons(ctx, mk_symbol(ctx, "quote"), cons(ctx, get_object(ctx), ctx->NIL));
+  if (obj == ctx->SYMBOL_QUOTE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_QUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->PARENTHESIS_OPEN) {
     return get_obj_list(ctx);
   }
@@ -802,7 +809,7 @@ cell_t *eval_ex(
   } else if (is_sym(_car(obj))) {
     cell_t *cmd = _car(obj);
     cell_t *args = _cdr(obj);
-    if (cmd == mk_symbol(ctx, "if")) {
+    if (cmd == ctx->SYMBOL_IF) {
       /* (if a b c) */
       if (list_length(args) != 3) {
         printf("ERROR if requires 3 arguments\n");
@@ -816,7 +823,7 @@ cell_t *eval_ex(
           ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
         }
       }
-    } else if (cmd == mk_symbol(ctx, "define")) {
+    } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
         printf("ERROR: define requites 2 arguments\n");
       } else {
@@ -828,11 +835,11 @@ cell_t *eval_ex(
           ret = env_define(ctx, name, eval(ctx, value));
         }
       }
-    } else if (cmd == mk_symbol(ctx, "lambda")) {
+    } else if (cmd == ctx->SYMBOL_LAMBDA) {
       ret = mk_lambda(ctx, args);
-    } else if (cmd == mk_symbol(ctx, "quote")) {
+    } else if (cmd == ctx->SYMBOL_QUOTE) {
       ret = _car(args);
-    } else if (cmd == mk_symbol(ctx, "begin")) {
+    } else if (cmd == ctx->SYMBOL_BEGIN) {
       while( !is_null(ctx, args)) {
         if (is_null(ctx, _cdr(args))) {
           ret = eval_ex(ctx, _car(args), last_lambda, tail_recursion_args);
@@ -926,6 +933,13 @@ void scheme_init(scheme_ctx_t *ctx) {
 
   ctx->PARENTHESIS_OPEN = mk_symbol(ctx, "(");
   ctx->PARENTHESIS_CLOSE = mk_symbol(ctx, ")");
+  ctx->SYMBOL_IF = mk_symbol(ctx, "if");
+  ctx->SYMBOL_BEGIN = mk_symbol(ctx, "begin");
+  ctx->SYMBOL_LAMBDA = mk_symbol(ctx, "lambda");
+  ctx->SYMBOL_DOT = mk_symbol(ctx, ".");
+  ctx->SYMBOL_DEFINE = mk_symbol(ctx, "define");
+  ctx->SYMBOL_QUOTE_ALIAS = mk_symbol(ctx, "'");
+  ctx->SYMBOL_QUOTE = mk_symbol(ctx,"quote");
 
   env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
   env_define(ctx, mk_symbol(ctx, "#f"), ctx->FALSE);
