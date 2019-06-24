@@ -817,6 +817,51 @@ cell_t *eval_ex(scheme_ctx_t *ctx,
     cell_t *last_lambda,
     cell_t **tail_recursion_args);
 
+
+cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *last_lambda, cell_t **tail_recursion_args) {
+  if (lambda == last_lambda && tail_recursion_args) {
+    /* TAIL RECURSION: */
+    /* evaluate arguments and return to caller */
+    *tail_recursion_args = eval_list(ctx, args);
+    return ctx->NIL;
+  }
+  cell_t *old_env = ctx->env;  /* XXX */
+  cell_t *old_sink = ctx->sink;
+  cell_t *rec = NULL;
+  cell_t *vars  = args;
+  cell_t *ret = ctx->NIL;
+
+  do {
+    cell_t *names = lambda->u.lambda.names;
+    cell_t *body  = lambda->u.lambda.body;
+    for( ;
+        !is_null(ctx, names) && !is_null(ctx, vars);
+        names = _cdr(names), vars = _cdr(vars)) {
+      /* when in TAIL RECURSION arguments are already evaluated ... */
+      if (rec) {
+        env_define(ctx, _car(names), _car(vars));
+      } else {
+        env_define(ctx, _car(names), eval(ctx, _car(vars)));
+      }
+    }
+    rec = NULL;
+    ret = eval_ex(ctx, body, lambda, &rec);
+    if (rec) {
+      /* TAIL RECURSION */
+    //  names = _car(_cdr(lambda));
+      vars = rec;
+      ctx->args = vars; /* for gc */
+      ctx->result = ret; /* for gc */
+    } else {
+      ctx->args = ctx->NIL;
+    }
+    ctx->env = old_env;  /* XXX */
+    ctx->sink = old_sink; /*XXX  */
+  } while(rec);
+  return ret;
+}
+
+
 cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
 {
   return eval_ex(ctx, obj, NULL, NULL);
@@ -889,56 +934,18 @@ cell_t *eval_ex(
       } else if (is_primop(resolved_cmd)) {
         ret = apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
       } else if (is_lambda(resolved_cmd)) {
-        ret = eval_ex(ctx,
-            cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
+        ret = apply_lambda(ctx, resolved_cmd, args, last_lambda, tail_recursion_args);
       }
     }
   } else if(is_pair(_car(obj))) {
     ret = eval_ex (ctx, _car(obj), last_lambda, tail_recursion_args);
     if (is_lambda(ret)) {
-      ret = eval_ex(ctx, cons(ctx, ret, _cdr(obj)), last_lambda, tail_recursion_args);
+      ret = apply_lambda(ctx, ret, _cdr(obj), last_lambda, tail_recursion_args);
     }
   } else if(is_lambda(_car(obj))){
-    /* lambda */
-    cell_t *lambda = _car(obj);
-    cell_t *args   = _cdr(obj);
-    if (lambda == last_lambda && tail_recursion_args) {
-      /* TAIL RECURSION: */
-      /* evaluate arguments and return to caller */
-      *tail_recursion_args = eval_list(ctx, args);
-      ctx->sink = old_sink; /*XXX  */
-      return ctx->NIL;
-    }
-    cell_t *rec = NULL;
-    cell_t *vars  = args;
-
-    do {
-      cell_t *names = lambda->u.lambda.names;
-      cell_t *body  = lambda->u.lambda.body;
-      for( ;
-          !is_null(ctx, names) && !is_null(ctx, vars);
-          names = _cdr(names), vars = _cdr(vars)) {
-        /* when in TAIL RECURSION arguments are already evaluated ... */
-        if (rec) {
-          env_define(ctx, _car(names), _car(vars));
-        } else {
-          env_define(ctx, _car(names), eval(ctx, _car(vars)));
-        }
-      }
-      rec = NULL;
-      ret = eval_ex(ctx, body, lambda, &rec);
-      if (rec) {
-        /* TAIL RECURSION */
-      //  names = _car(_cdr(lambda));
-        vars = rec;
-        ctx->args = vars; /* for gc */
-        ctx->result = ret; /* for gc */
-      } else {
-        ctx->args = ctx->NIL;
-      }
-      ctx->env = old_env;  /* XXX */
-      ctx->sink = old_sink; /* XXX */
-    } while(rec);
+    cell_t *cmd = _car(obj);
+    cell_t *args = _cdr(obj);
+    ret = apply_lambda(ctx, cmd, args, last_lambda, tail_recursion_args);
   } else {
     printf("cannot apply\n");
     print_obj(ctx, obj);
