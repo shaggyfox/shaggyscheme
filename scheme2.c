@@ -149,7 +149,7 @@ struct cell_s {
   } u;
 };
 
-#define MAX_MEMORY (1024)
+#define MAX_MEMORY (1024 * 16)
 struct scheme_ctx_s {
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
@@ -163,7 +163,7 @@ struct scheme_ctx_s {
   cell_t *code;
   cell_t *result;
   cell_t *args;
-  cell_t memory[MAX_MEMORY];
+  cell_t *memory;
   int memory_in_use;
   int memory_pos;
   tokenizer_ctx_t tokenizer_ctx;
@@ -189,11 +189,12 @@ cell_t *raw_get_cell(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   }
   int i = ctx->memory_pos;
   for (int cnt = 0; cnt < MAX_MEMORY; ++cnt) {
-    if (!(ctx->memory[i].flags & CELL_F_USED)) {
-      ctx->memory[i].flags |= CELL_F_USED;
+    cell_t *current_cell = &ctx->memory[i];
+    if (!(current_cell->flags & CELL_F_USED)) {
+      current_cell->flags |= CELL_F_USED;
       ctx->memory_in_use += 1;
       ctx->memory_pos = i;
-      return &ctx->memory[i];
+      return current_cell;
     }
     i = (i + 1) % MAX_MEMORY;
   }
@@ -289,30 +290,51 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   mark_cells(ctx->result);
   mark_cells(tmp_a);
   mark_cells(tmp_b);
-
-
 #if 0
-  for (int i = 0; i < MAX_MEMORY; ++i) {
-    if (ctx->memory[i].flags & CELL_F_USED) {
-      if (!(ctx->memory[i].flags & CELL_F_MARK)) {
-        printf("collect: ");
-        print_obj(ctx, &ctx->memory[i]);
-        printf("\n");
-      }
-    }
-  }
+  int collect_pair = 0;
+  int collect_sym = 0;
+  int collect_int = 0;
+  int collect_str = 0;
+  int collect_lambda = 0;
+  int collect_primop = 0;
+  int collect_other = 0;
 #endif
-  int collected = 0;
+
+
   for (int i = 0; i < MAX_MEMORY; ++i) {
-    if (ctx->memory[i].flags & CELL_F_USED) {
-      if (!(ctx->memory[i].flags & CELL_F_MARK)) {
-        ctx->memory[i].flags &= ~CELL_F_USED;
-        memset(&ctx->memory[i], 0, sizeof(ctx->memory[i]));
-        ctx->memory_in_use -= 1;
-        ++ collected;
+    cell_t *current_cell = &ctx->memory[i];
+    if ((current_cell->flags & (CELL_F_USED | CELL_F_MARK)) == CELL_F_USED) {
+#if 0
+      switch(current_cell->type) {
+        case CELL_T_INTEGER:
+          collect_int += 1;
+          break;
+        case CELL_T_PAIR:
+          collect_pair += 1;
+          break;
+        case CELL_T_LAMBDA:
+          collect_lambda += 1;
+          break;
+        case CELL_T_PRIMOP:
+          collect_primop += 1;
+          break;
+        case CELL_T_STRING:
+          collect_str += 1;
+          break;
+        case CELL_T_SYMBOL:
+          collect_sym += 1;
+          break;
+        default:
+          collect_other += 1;
+          break;
       }
+#endif
+      current_cell->flags &= ~CELL_F_USED;
+      memset(current_cell, 0, sizeof(*current_cell));
+      ctx->memory_in_use -= 1;
     }
   }
+
   unmark_cells(ctx->sink);
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
@@ -320,10 +342,16 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   unmark_cells(ctx->result);
   unmark_cells(tmp_a);
   unmark_cells(tmp_b);
-#if GC_DEBUG
-  if (collected) {
-    printf("DEBUG: gc collect %d cells\n", collected);
-  }
+#if 0
+  printf("collected: \n"
+         "%d ints\n"
+         "%d pairs\n"
+         "%d lambdas \n"
+         "%d primops \n"
+         "%d strings \n"
+         "%d symbols \n"
+         "%d others\n",collect_int, collect_pair,collect_lambda, collect_primop,
+         collect_str, collect_sym, collect_other);
 #endif
 }
 
@@ -433,6 +461,11 @@ cell_t *get_object(scheme_ctx_t *ctx);
 cell_t *get_obj_list(scheme_ctx_t *ctx)
 {
   cell_t *obj = get_object(ctx);
+  if (!obj) {
+    /* EOF reached */
+    printf("missing ')' at end of input\n");
+    exit(1);
+  }
   if (obj == ctx->PARENTHESIS_CLOSE) {
     return ctx->NIL;
   }
@@ -928,6 +961,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->code = ctx->NIL;
   ctx->result = ctx->NIL;
   ctx->args = ctx->NIL;
+  ctx->memory = calloc(1, sizeof(cell_t) * MAX_MEMORY);
   /* init tokenizer for stdin */
   tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
 
