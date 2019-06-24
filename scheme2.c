@@ -193,14 +193,12 @@ cell_t *raw_get_cell(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
     if (!(current_cell->flags & CELL_F_USED)) {
       current_cell->flags |= CELL_F_USED;
       ctx->memory_in_use += 1;
-      ctx->memory_pos = i;
+      ctx->memory_pos = (i + 1) % MAX_MEMORY;
       return current_cell;
     }
     i = (i + 1) % MAX_MEMORY;
   }
   printf("out of memory\n");
- /* print_obj(ctx, ctx->sink);
-  printf("\n"); */
   exit(1);
   return NULL;
 }
