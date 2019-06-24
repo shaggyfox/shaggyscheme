@@ -874,7 +874,6 @@ cell_t *eval_ex(
 {
   cell_t *ret = ctx->NIL;
   cell_t *old_sink = ctx->sink;
-  cell_t *old_env = ctx->env;
 
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
