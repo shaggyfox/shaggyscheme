@@ -6,8 +6,8 @@
 
 struct tokenizer_ctx_s {
   char *token_buf;
-  int token_buf_size;
-  int token_buf_pos;
+  size_t token_buf_size;
+  size_t token_buf_pos;
   char look_ahead;
   char (*get_char)(void *data);
   void *get_char_data;
@@ -67,7 +67,7 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
   while(is_whitespace(ctx->look_ahead)) {
     /* skip commentary */
     if (ctx->look_ahead == ';') {
-      while(ctx->look_ahead != '\n' || ctx->look_ahead == 0) {
+      while(ctx->look_ahead != '\n' && ctx->look_ahead != 0) {
         ctx->look_ahead = ctx->get_char(ctx->get_char_data);
       }
     } else {
@@ -366,14 +366,13 @@ void gc_info(scheme_ctx_t *ctx)
 
 cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
 {
-  cell_t *ret = ctx->NIL;
   for (cell_t *tmp = ctx->syms; !is_null(ctx, tmp); tmp = _cdr(tmp)) {
     if (!strcmp(str, _car(tmp)->u.symbol)) {
       return _car(tmp);
     }
   }
   /* add new entry */
-  ret = get_cell(ctx);
+  cell_t *ret = get_cell(ctx);
   ret->type = CELL_T_SYMBOL;
   ret->u.symbol = strdup(str);
   ctx->syms = cons(ctx, ret, ctx->syms);
@@ -822,7 +821,13 @@ cell_t *eval_ex(scheme_ctx_t *ctx,
     cell_t **tail_recursion_args);
 
 
-cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *last_lambda, cell_t **tail_recursion_args) {
+cell_t *apply_lambda(
+    scheme_ctx_t *ctx,
+    cell_t *lambda,
+    cell_t *args,
+    cell_t *last_lambda,
+    cell_t **tail_recursion_args)
+{
   if (lambda == last_lambda && tail_recursion_args) {
     /* TAIL RECURSION: */
     /* evaluate arguments and return to caller */
@@ -833,7 +838,7 @@ cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *la
   int old_sink_pos = ctx->sink_pos;
   cell_t *rec = NULL;
   cell_t *vars  = args;
-  cell_t *ret = ctx->NIL;
+  cell_t *ret;
 
   do {
     cell_t *names = lambda->u.lambda.names;
