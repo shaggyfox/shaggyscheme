@@ -365,6 +365,8 @@ void gc_info(scheme_ctx_t *ctx)
 #define is_lambda(obj) ((obj)->type == CELL_T_LAMBDA)
 /* symbols */
 
+static int get_args(cell_t *args, int nr, int types[], cell_t *ret[]);
+
 cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
 {
   for (cell_t *tmp = ctx->syms; !is_null(ctx, tmp); tmp = _cdr(tmp)) {
@@ -406,6 +408,15 @@ cell_t *mk_integer(scheme_ctx_t *ctx, int integer)
 
 cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
 {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(lambda, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  if (!is_pair(arg[0]) && !is_sym(arg[0])) {
+    printf("lambda: parameter 1 must be a pair or sym\n");
+    return ctx->NIL;
+  }
   cell_t *ret = get_cell(ctx);
   ret->type = CELL_T_LAMBDA;
   ret->u.lambda.names = _car(lambda); /* XXX arg 1 */
@@ -879,14 +890,22 @@ cell_t *apply_lambda(
   do {
     cell_t *names = lambda->u.lambda.names;
     cell_t *body  = lambda->u.lambda.body;
-    for( ;
-        !is_null(ctx, names) && !is_null(ctx, vars);
-        names = _cdr(names), vars = _cdr(vars)) {
-      /* when in TAIL RECURSION arguments are already evaluated ... */
+    if (is_pair(names)) {
+      for( ;
+          !is_null(ctx, names) && !is_null(ctx, vars);
+          names = _cdr(names), vars = _cdr(vars)) {
+        /* when in TAIL RECURSION arguments are already evaluated ... */
+        if (rec) {
+          env_define(ctx, _car(names), _car(vars));
+        } else {
+          env_define(ctx, _car(names), eval(ctx, _car(vars)));
+        }
+      }
+    } else {
       if (rec) {
-        env_define(ctx, _car(names), _car(vars));
+        env_define(ctx, names, vars);
       } else {
-        env_define(ctx, _car(names), eval(ctx, _car(vars)));
+        env_define(ctx, names, eval_list(ctx, vars));
       }
     }
     rec = NULL;
@@ -950,7 +969,9 @@ cell_t *eval_ex(
       cell_t *body = _car(_cdr(args)); /* body */
       cell_t *macro_name = _car(arg0);
       cell_t *macro_args = _cdr(arg0);
-      cell_t *lambda = mk_macro(ctx, macro_args, body);
+      cell_t *old_env = ctx->env;
+
+      ctx->env = old_env;
 #endif
     } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
