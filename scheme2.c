@@ -150,7 +150,10 @@ struct cell_s {
 };
 
 #define MAX_MEMORY (1024 * 16)
+#define MAX_SINK_SIZE 1024
 struct scheme_ctx_s {
+  cell_t *sink[MAX_SINK_SIZE];
+  int  sink_pos;
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
   cell_t FALSE_VALUE;
@@ -158,7 +161,6 @@ struct scheme_ctx_s {
   cell_t *FALSE;
   cell_t *TRUE;
   cell_t *syms;
-  cell_t *sink;
   cell_t *env;
   cell_t *code;
   cell_t *result;
@@ -220,7 +222,11 @@ cell_t *get_cell(scheme_ctx_t *ctx)
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *cell)
 {
-  ctx->sink = raw_cons(ctx, cell, ctx->sink);
+  if (ctx->sink_pos >= MAX_SINK_SIZE) {
+    printf("out of sink space\n");
+    return cell;
+  }
+  ctx->sink[ctx->sink_pos ++] = cell;
   return cell;
 }
 
@@ -281,76 +287,35 @@ void unmark_cells(cell_t *cell)
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
 void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
 {
-  mark_cells(ctx->sink);
+  for(int i = 0; i < ctx->sink_pos; ++i) {
+    mark_cells(ctx->sink[i]);
+  }
   mark_cells(ctx->syms);
   mark_cells(ctx->env);
   mark_cells(ctx->args);
   mark_cells(ctx->result);
   mark_cells(tmp_a);
   mark_cells(tmp_b);
-#if 0
-  int collect_pair = 0;
-  int collect_sym = 0;
-  int collect_int = 0;
-  int collect_str = 0;
-  int collect_lambda = 0;
-  int collect_primop = 0;
-  int collect_other = 0;
-#endif
 
 
   for (int i = 0; i < MAX_MEMORY; ++i) {
     cell_t *current_cell = &ctx->memory[i];
     if ((current_cell->flags & (CELL_F_USED | CELL_F_MARK)) == CELL_F_USED) {
-#if 0
-      switch(current_cell->type) {
-        case CELL_T_INTEGER:
-          collect_int += 1;
-          break;
-        case CELL_T_PAIR:
-          collect_pair += 1;
-          break;
-        case CELL_T_LAMBDA:
-          collect_lambda += 1;
-          break;
-        case CELL_T_PRIMOP:
-          collect_primop += 1;
-          break;
-        case CELL_T_STRING:
-          collect_str += 1;
-          break;
-        case CELL_T_SYMBOL:
-          collect_sym += 1;
-          break;
-        default:
-          collect_other += 1;
-          break;
-      }
-#endif
       current_cell->flags &= ~CELL_F_USED;
       memset(current_cell, 0, sizeof(*current_cell));
       ctx->memory_in_use -= 1;
     }
   }
 
-  unmark_cells(ctx->sink);
+  for (int i = 0; i < ctx->sink_pos; ++i) {
+    unmark_cells(ctx->sink[i]);
+  }
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
   unmark_cells(ctx->args);
   unmark_cells(ctx->result);
   unmark_cells(tmp_a);
   unmark_cells(tmp_b);
-#if 0
-  printf("collected: \n"
-         "%d ints\n"
-         "%d pairs\n"
-         "%d lambdas \n"
-         "%d primops \n"
-         "%d strings \n"
-         "%d symbols \n"
-         "%d others\n",collect_int, collect_pair,collect_lambda, collect_primop,
-         collect_str, collect_sym, collect_other);
-#endif
 }
 
 void gc_info(scheme_ctx_t *ctx)
@@ -824,7 +789,7 @@ cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *la
     return ctx->NIL;
   }
   cell_t *old_env = ctx->env;  /* XXX */
-  cell_t *old_sink = ctx->sink;
+  int old_sink_pos = ctx->sink_pos;
   cell_t *rec = NULL;
   cell_t *vars  = args;
   cell_t *ret = ctx->NIL;
@@ -846,7 +811,6 @@ cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *la
     ret = eval_ex(ctx, body, lambda, &rec);
     if (rec) {
       /* TAIL RECURSION */
-    //  names = _car(_cdr(lambda));
       vars = rec;
       ctx->args = vars; /* for gc */
       ctx->result = ret; /* for gc */
@@ -854,7 +818,7 @@ cell_t *apply_lambda(scheme_ctx_t *ctx, cell_t *lambda, cell_t *args, cell_t *la
       ctx->args = ctx->NIL;
     }
     ctx->env = old_env;  /* XXX */
-    ctx->sink = old_sink; /*XXX  */
+    ctx->sink_pos = old_sink_pos; /*XXX  */
   } while(rec);
   return ret;
 }
@@ -871,7 +835,7 @@ cell_t *eval_ex(
     cell_t      **tail_recursion_args)
 {
   cell_t *ret = ctx->NIL;
-  cell_t *old_sink = ctx->sink;
+  int old_sink_pos = ctx->sink_pos;
 
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
@@ -949,7 +913,7 @@ cell_t *eval_ex(
     printf("\n");
   }
   ctx->result = ret; /* keep result from being GCed */
-  ctx->sink = old_sink;
+  ctx->sink_pos = old_sink_pos;
   return ret;
 }
 
@@ -959,7 +923,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->NIL = &ctx->NIL_VALUE;
   ctx->TRUE = &ctx->TRUE_VALUE;
   ctx->FALSE = &ctx->FALSE_VALUE;
-  ctx->sink = ctx->NIL;
+  ctx->sink_pos = 0;
   ctx->syms = ctx->NIL;
   ctx->env = ctx->NIL;
   ctx->code = ctx->NIL;
@@ -1000,7 +964,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   env_define(ctx, mk_symbol(ctx, "<"), mk_primop(ctx, &op_lt));
   env_define(ctx, mk_symbol(ctx, ">="), mk_primop(ctx, &op_gt_eq));
   env_define(ctx, mk_symbol(ctx, "<="), mk_primop(ctx, &op_lt_eq));
-  ctx->sink = ctx->NIL;
+  ctx->sink_pos = 0;
   gc_collect(ctx, ctx->NIL, ctx->NIL);
   /* debug output */
   gc_info(ctx);
@@ -1013,10 +977,8 @@ void scheme_load_memory(scheme_ctx_t *ctx, char *memory, size_t len)
   data.pos = 0;
   data.memory = memory;
   tokenizer_init(&ctx->tokenizer_ctx, memory_get_char, &data);
-  cell_t *old_sink = ctx->sink;
   for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
     eval(ctx, obj);
-    ctx->sink = old_sink;
   }
 }
 
@@ -1029,10 +991,8 @@ void scheme_load_file(scheme_ctx_t *ctx, char *filename)
   }
   tokenizer_init(&ctx->tokenizer_ctx, default_get_char, fd);
 
-  cell_t *old_sink = ctx->sink;
   for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
     eval(ctx, obj);
-    ctx->sink = old_sink;
   }
   fclose(fd);
 }
@@ -1049,7 +1009,6 @@ int main(int argc, char *argv[])
     while((obj = get_object(&ctx))) {
       print_obj(&ctx, eval(&ctx, obj));
       printf("\n");
-      ctx.sink = ctx.NIL;
     }
   }
 
