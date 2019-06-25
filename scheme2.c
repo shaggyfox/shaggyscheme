@@ -321,8 +321,11 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   for (int i = 0; i < MAX_MEMORY; ++i) {
     cell_t *current_cell = &ctx->memory[i];
     if ((current_cell->flags & (CELL_F_USED | CELL_F_MARK)) == CELL_F_USED) {
-      current_cell->flags &= ~CELL_F_USED;
+      current_cell->flags = 0;
+#if 0
+      /* this is useful for debugging garbage collector */
       memset(current_cell, 0, sizeof(*current_cell));
+#endif
       ctx->memory_in_use -= 1;
     }
   }
