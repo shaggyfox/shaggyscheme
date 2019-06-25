@@ -12,6 +12,7 @@ struct tokenizer_ctx_s {
   char (*get_char)(void *data);
   void *get_char_data;
   int in_quotes;
+  int esc;
 };
 
 typedef struct tokenizer_ctx_s tokenizer_ctx_t;
@@ -96,13 +97,32 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
           }
           ctx->token_buf = resized_buf;
         }
-        if (ctx->look_ahead == '"') {
+        if (ctx->look_ahead == '"' && !ctx->esc) {
           ctx->in_quotes = !ctx->in_quotes;
         } else if (ctx->look_ahead == 0) {
           /* this is an error */
           break;
         }
-        ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+        if (ctx->esc) {
+          switch(ctx->look_ahead) {
+            case 'n':
+              ctx->token_buf[ctx->token_buf_pos ++] = '\n';
+              break;
+            case 'r':
+              ctx->token_buf[ctx->token_buf_pos ++] = '\r';
+              break;
+            default:
+              ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+              break;
+          }
+          ctx->esc = 0;
+        } else {
+          if (ctx->look_ahead == '\\') {
+            ctx->esc = 1;
+          }  else {
+            ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+          }
+        }
         ctx->look_ahead = ctx->get_char(ctx->get_char_data);
       } while (ctx->in_quotes);
     }
@@ -513,9 +533,6 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
   }
 }
 
-/* primops */
-
-
 static char *get_type_name(int type)
 {
   return cell_type_names[type];
@@ -653,7 +670,7 @@ cell_t *op_lt_eq(scheme_ctx_t *ctx, cell_t *args) {
   return arg[0]->u.integer <= arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
 }
 
-cell_t *display(scheme_ctx_t *ctx, cell_t *args)
+cell_t *write_primop(scheme_ctx_t *ctx, cell_t *args)
 {
   cell_t *arg_array[1];
   int arg_types[] = {CELL_T_EMPTY};
@@ -663,9 +680,30 @@ cell_t *display(scheme_ctx_t *ctx, cell_t *args)
   return ctx->NIL;
 }
 
+cell_t *display(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg_array[1];
+  int arg_types[] = {CELL_T_EMPTY};
+  if (!get_args(args, 1, arg_types, arg_array)) {
+    if (arg_array[0]->type == CELL_T_STRING) {
+      printf("%s", arg_array[0]->u.string);
+    } else {
+      print_obj(ctx, arg_array[0]);
+    }
+  }
+  return ctx->NIL;
+}
+
 cell_t *newline(scheme_ctx_t *ctx, cell_t *args)
 {
   printf("\n");
+  return ctx->NIL;
+}
+
+cell_t *flush_output(scheme_ctx_t *ctx, cell_t *args)
+{
+  /* ignore args for now */
+  fflush(stdout);
   return ctx->NIL;
 }
 
@@ -946,8 +984,10 @@ void scheme_init(scheme_ctx_t *ctx) {
   env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
   env_define(ctx, mk_symbol(ctx, "#f"), ctx->FALSE);
   env_define(ctx, mk_symbol(ctx, "eq?"), mk_primop(ctx, &eq));
+  env_define(ctx, mk_symbol(ctx, "write"), mk_primop(ctx, &write_primop));
   env_define(ctx, mk_symbol(ctx, "display"), mk_primop(ctx, &display));
   env_define(ctx, mk_symbol(ctx, "newline"), mk_primop(ctx, &newline));
+  env_define(ctx, mk_symbol(ctx, "flush-output"), mk_primop(ctx, &flush_output));
   env_define(ctx, mk_symbol(ctx, "cons"), mk_primop(ctx, &primop_cons));
   env_define(ctx, mk_symbol(ctx, "length"), mk_primop(ctx, &primop_length));
   env_define(ctx, mk_symbol(ctx, "car"), mk_primop(ctx, &car));
