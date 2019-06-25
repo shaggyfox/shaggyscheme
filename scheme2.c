@@ -198,6 +198,7 @@ struct scheme_ctx_s {
   cell_t *SYMBOL_DEFINE;
   cell_t *SYMBOL_DOT;
   cell_t *SYMBOL_QUOTE_ALIAS;
+  cell_t *SYMBOL_MACRO;
 };
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
@@ -805,6 +806,16 @@ cell_t *env_resolve(scheme_ctx_t *ctx, cell_t *symbol)
 /* eval */
 
 cell_t *eval(scheme_ctx_t *ctx, cell_t *obj);
+
+cell_t *eval_primop(scheme_ctx_t *ctx, cell_t *obj)
+{
+  if (list_length( obj )!= 1) {
+    printf("eval only has/needs one argument\n");
+    return ctx->NIL;
+  }
+  return eval(ctx, _car(obj));
+}
+
 cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
 {
   if (ctx->NIL == list) {
@@ -813,6 +824,31 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   /* XXX the result of eval is not in sink ... only in ctx->result but
    * this will be overwritten by any other eval */
   return cons(ctx, add_to_sink(ctx, eval(ctx, _car(list))), eval_list(ctx, _cdr(list)));
+}
+
+cell_t *apply_lambda(
+    scheme_ctx_t *ctx,
+    cell_t *lambda,
+    cell_t *args,
+    cell_t *last_lambda,
+    cell_t **tail_recursion_args);
+
+cell_t *apply(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[2];
+  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  /* XXX check if arg[1] is either NULL or PAIR */
+  if (is_primop(arg[0])) {
+    return apply_primop(ctx, arg[0], arg[1]);
+  } else if (is_lambda(arg[0])) {
+    return apply_lambda(ctx, arg[0], arg[1], NULL, NULL);
+  } else {
+    printf("error applying\n");
+  }
+  return ctx->NIL;
 }
 
 cell_t *eval_ex(scheme_ctx_t *ctx,
@@ -908,6 +944,14 @@ cell_t *eval_ex(
           ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
         }
       }
+    } else if (cmd == ctx->SYMBOL_MACRO) {
+#if 0
+      cell_t *arg0 = _car(args); /* name + args */
+      cell_t *body = _car(_cdr(args)); /* body */
+      cell_t *macro_name = _car(arg0);
+      cell_t *macro_args = _cdr(arg0);
+      cell_t *lambda = mk_macro(ctx, macro_args, body);
+#endif
     } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
         printf("ERROR: define requites 2 arguments\n");
@@ -988,10 +1032,13 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->SYMBOL_DEFINE = mk_symbol(ctx, "define");
   ctx->SYMBOL_QUOTE_ALIAS = mk_symbol(ctx, "'");
   ctx->SYMBOL_QUOTE = mk_symbol(ctx,"quote");
+  ctx->SYMBOL_MACRO = mk_symbol(ctx, "macro");
 
   env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
   env_define(ctx, mk_symbol(ctx, "#f"), ctx->FALSE);
   env_define(ctx, mk_symbol(ctx, "eq?"), mk_primop(ctx, &eq));
+  env_define(ctx, mk_symbol(ctx, "apply"), mk_primop(ctx, &apply));
+  env_define(ctx, mk_symbol(ctx, "eval"), mk_primop(ctx, &eval_primop));
   env_define(ctx, mk_symbol(ctx, "write"), mk_primop(ctx, &write_primop));
   env_define(ctx, mk_symbol(ctx, "display"), mk_primop(ctx, &display));
   env_define(ctx, mk_symbol(ctx, "newline"), mk_primop(ctx, &newline));
