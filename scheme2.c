@@ -532,7 +532,7 @@ cell_t *get_object(scheme_ctx_t *ctx)
   if (obj == ctx->SYMBOL_QUOTE_ALIAS) {
     return cons(ctx, ctx->SYMBOL_QUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->SYMBOL_QUASIQUOTE_ALIAS) {
-    return cons(ctx, ctx->SYMBOL_QUASIQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
+    return cons(ctx, ctx->SYMBOL_QUASIQUOTE, get_object(ctx));
   } else if (obj == ctx->SYMBOL_UNQUOTE_ALIAS) {
     return cons(ctx, ctx->SYMBOL_UNQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->PARENTHESIS_OPEN) {
@@ -885,6 +885,21 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   return cons(ctx, add_to_sink(ctx, eval(ctx, _car(list))), eval_list(ctx, _cdr(list)));
 }
 
+cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
+{
+  if (!is_pair(list)) {
+    return ctx->NIL;
+  }
+  cell_t *obj;
+  if (is_pair(_car(list)) && ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
+    printf("iaren\n");
+    obj = eval(ctx, _car(_cdr(_car(list))));
+  } else {
+    obj = _car(list);
+  }
+  return (cons(ctx, add_to_sink(ctx, obj), eval_quasiquote(ctx, _cdr(list))));
+}
+
 cell_t *apply_macro( scheme_ctx_t *ctx, cell_t *macro, cell_t *args)
 {
   cell_t *ret = ctx->NIL;
@@ -1050,7 +1065,7 @@ cell_t *eval_ex(
     } else if (cmd == ctx->SYMBOL_QUOTE) {
       ret = _car(args);
     } else if (cmd == ctx->SYMBOL_QUASIQUOTE) {
-      /* XXX do this ... recursive ;) */
+      ret = eval_quasiquote(ctx, args);
     } else if (cmd == ctx->SYMBOL_BEGIN) {
       while( !is_null(ctx, args)) {
         if (is_null(ctx, _cdr(args))) {
