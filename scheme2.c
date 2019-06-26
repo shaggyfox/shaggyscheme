@@ -202,7 +202,13 @@ struct scheme_ctx_s {
   cell_t *SYMBOL_DEFINE;
   cell_t *SYMBOL_DOT;
   cell_t *SYMBOL_QUOTE_ALIAS;
+  cell_t *SYMBOL_QUASIQUOTE;
+  cell_t *SYMBOL_QUASIQUOTE_ALIAS;
   cell_t *SYMBOL_MACRO;
+  cell_t *SYMBOL_UNQUOTE;
+  cell_t *SYMBOL_UNQUOTE_ALIAS;
+  cell_t *SYMBOL_UNQUOTE_SPLICE;
+  cell_t *SYMBOL_UNQUOTE_SPLICE_ALIAS;
 };
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
@@ -524,6 +530,10 @@ cell_t *get_object(scheme_ctx_t *ctx)
   cell_t *obj = mk_object_from_token(ctx, value);
   if (obj == ctx->SYMBOL_QUOTE_ALIAS) {
     return cons(ctx, ctx->SYMBOL_QUOTE, cons(ctx, get_object(ctx), ctx->NIL));
+  } else if (obj == ctx->SYMBOL_QUASIQUOTE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_QUASIQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
+  } else if (obj == ctx->SYMBOL_UNQUOTE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_UNQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->PARENTHESIS_OPEN) {
     return get_obj_list(ctx);
   }
@@ -1038,6 +1048,8 @@ cell_t *eval_ex(
       ret = mk_lambda(ctx, args);
     } else if (cmd == ctx->SYMBOL_QUOTE) {
       ret = _car(args);
+    } else if (cmd == ctx->SYMBOL_QUASIQUOTE) {
+      /* XXX do this ... recursive ;) */
     } else if (cmd == ctx->SYMBOL_BEGIN) {
       while( !is_null(ctx, args)) {
         if (is_null(ctx, _cdr(args))) {
@@ -1110,6 +1122,12 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->SYMBOL_DEFINE = mk_symbol(ctx, "define");
   ctx->SYMBOL_QUOTE_ALIAS = mk_symbol(ctx, "'");
   ctx->SYMBOL_QUOTE = mk_symbol(ctx,"quote");
+  ctx->SYMBOL_QUASIQUOTE = mk_symbol(ctx, "quasiquote");
+  ctx->SYMBOL_QUASIQUOTE_ALIAS = mk_symbol(ctx, "`");
+  ctx->SYMBOL_UNQUOTE = mk_symbol(ctx, "unquote");
+  ctx->SYMBOL_UNQUOTE_ALIAS = mk_symbol(ctx, ",");
+  ctx->SYMBOL_UNQUOTE_SPLICE = mk_symbol(ctx, "unquote-splice");
+  ctx->SYMBOL_UNQUOTE_SPLICE_ALIAS = mk_symbol(ctx, ",@");
   ctx->SYMBOL_MACRO = mk_symbol(ctx, "macro");
 
   env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
