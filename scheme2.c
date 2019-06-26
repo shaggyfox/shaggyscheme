@@ -142,10 +142,10 @@ typedef struct cell_s cell_t;
 
 enum cell_type_e {
   CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL,
-  CELL_T_INTEGER, CELL_T_PRIMOP, CELL_T_LAMBDA};
+  CELL_T_INTEGER, CELL_T_PRIMOP, CELL_T_LAMBDA, CELL_T_MACRO};
 
 static char *cell_type_names[] = {
-  "empty", "pair", "string", "symbol", "integer", "primop", "lambda", NULL
+  "empty", "pair", "string", "symbol", "integer", "primop", "lambda", "macro", NULL
 };
 
 struct cell_s {
@@ -166,6 +166,10 @@ struct cell_s {
       cell_t *names;
       cell_t *body;
     } lambda;
+    struct {
+      cell_t *arg_name;
+      cell_t *body;
+    } macro;
   } u;
 };
 
@@ -280,6 +284,10 @@ void mark_cells(cell_t *cell)
       mark_cells(cell->u.lambda.names);
       mark_cells(cell->u.lambda.body);
       break;
+    case CELL_T_MACRO:
+      mark_cells(cell->u.macro.arg_name);
+      mark_cells(cell->u.macro.body);
+      break;
     default:
       break;
   }
@@ -299,6 +307,10 @@ void unmark_cells(cell_t *cell)
     case CELL_T_LAMBDA:
       unmark_cells(cell->u.lambda.names);
       unmark_cells(cell->u.lambda.body);
+      break;
+    case CELL_T_MACRO:
+      unmark_cells(cell->u.macro.arg_name);
+      unmark_cells(cell->u.macro.body);
       break;
     default:
       break;
@@ -363,6 +375,7 @@ void gc_info(scheme_ctx_t *ctx)
 #define is_false(ctx, obj) ((obj) == (ctx)->FALSE)
 #define is_primop(obj) ((obj)->type == CELL_T_PRIMOP)
 #define is_lambda(obj) ((obj)->type == CELL_T_LAMBDA)
+#define is_macro(obj) ((obj)->type == CELL_T_MACRO)
 /* symbols */
 
 static int get_args(cell_t *args, int nr, int types[], cell_t *ret[]);
@@ -413,7 +426,7 @@ cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
   if (get_args(lambda, 2, types, arg)) {
     return ctx->NIL;
   }
-  if (!is_pair(arg[0]) && !is_sym(arg[0])) {
+  if (!is_pair(arg[0]) && !is_sym(arg[0]) && !is_null(ctx, arg[0])) {
     printf("lambda: parameter 1 must be a pair or sym\n");
     return ctx->NIL;
   }
@@ -423,6 +436,27 @@ cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
   ret->u.lambda.body = _car(_cdr(lambda)); /* XXX arg 2 */
   return ret;
 }
+
+cell_t *mk_macro(scheme_ctx_t *ctx, cell_t *arg, cell_t *body)
+{
+
+#if 0
+      printf("DEBUG:");
+      printf("\nname = ");
+      print_obj(ctx, macro_name);
+      printf("\narg = ");
+      print_obj(ctx, macro_arg);
+      printf("\nbody= ");
+      print_obj(ctx, body);
+      printf("\n");
+#endif
+      cell_t *ret = get_cell(ctx);
+      ret->type = CELL_T_MACRO;
+      ret->u.macro.arg_name = arg;
+      ret->u.macro.body = body;
+      return ret;
+}
+
 
 /* --- obj --- */
 
@@ -532,6 +566,9 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       break;
     case CELL_T_LAMBDA:
       printf("<lambda>");
+      break;
+    case CELL_T_MACRO:
+      printf("<macro>");
       break;
     default:
       if (is_null(ctx, obj)) {
@@ -837,6 +874,19 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   return cons(ctx, add_to_sink(ctx, eval(ctx, _car(list))), eval_list(ctx, _cdr(list)));
 }
 
+cell_t *apply_macro( scheme_ctx_t *ctx, cell_t *macro, cell_t *args)
+{
+  cell_t *ret = ctx->NIL;
+  cell_t *old_env = ctx->env;
+
+  env_define(ctx, macro->u.macro.arg_name, args);
+  ret = eval(ctx, eval(ctx, macro->u.macro.body));
+
+  ctx->env = old_env;
+
+  return ret;
+}
+
 cell_t *apply_lambda(
     scheme_ctx_t *ctx,
     cell_t *lambda,
@@ -964,15 +1014,12 @@ cell_t *eval_ex(
         }
       }
     } else if (cmd == ctx->SYMBOL_MACRO) {
-#if 0
-      cell_t *arg0 = _car(args); /* name + args */
-      cell_t *body = _car(_cdr(args)); /* body */
+      cell_t *arg0 = _car(args); /* name + arg */
+      cell_t *macro_body = _car(_cdr(args)); /* body */
       cell_t *macro_name = _car(arg0);
-      cell_t *macro_args = _cdr(arg0);
-      cell_t *old_env = ctx->env;
-
-      ctx->env = old_env;
-#endif
+      cell_t *macro_arg = _car(_cdr(arg0));
+      ret = env_define(ctx, macro_name,
+          mk_macro(ctx, macro_arg, macro_body));
     } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
         printf("ERROR: define requites 2 arguments\n");
@@ -1007,17 +1054,25 @@ cell_t *eval_ex(
         ret = apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
       } else if (is_lambda(resolved_cmd)) {
         ret = apply_lambda(ctx, resolved_cmd, args, last_lambda, tail_recursion_args);
+      } else if (is_macro(resolved_cmd)) {
+        ret = apply_macro(ctx, resolved_cmd, cons(ctx, resolved_cmd, args));
       }
     }
   } else if(is_pair(_car(obj))) {
     ret = eval_ex (ctx, _car(obj), last_lambda, tail_recursion_args);
     if (is_lambda(ret)) {
       ret = apply_lambda(ctx, ret, _cdr(obj), last_lambda, tail_recursion_args);
+    } else if (is_macro(ret)) {
+      ret = apply_macro(ctx, ret, obj);
     }
   } else if(is_lambda(_car(obj))){
     cell_t *cmd = _car(obj);
     cell_t *args = _cdr(obj);
     ret = apply_lambda(ctx, cmd, args, last_lambda, tail_recursion_args);
+  } else if(is_macro(_car(obj))) {
+    ret = apply_macro(ctx, _car(obj), obj);
+  } else if(is_primop(_car(obj))) {
+    ret = apply_primop(ctx, _car(obj), _cdr(obj));
   } else {
     printf("cannot apply\n");
     print_obj(ctx, obj);
