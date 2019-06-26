@@ -6,12 +6,13 @@
 
 struct tokenizer_ctx_s {
   char *token_buf;
-  int token_buf_size;
-  int token_buf_pos;
+  size_t token_buf_size;
+  size_t token_buf_pos;
   char look_ahead;
   char (*get_char)(void *data);
   void *get_char_data;
   int in_quotes;
+  int esc;
 };
 
 typedef struct tokenizer_ctx_s tokenizer_ctx_t;
@@ -66,7 +67,7 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
   while(is_whitespace(ctx->look_ahead)) {
     /* skip commentary */
     if (ctx->look_ahead == ';') {
-      while(ctx->look_ahead != '\n' || ctx->look_ahead == 0) {
+      while(ctx->look_ahead != '\n' && ctx->look_ahead != 0) {
         ctx->look_ahead = ctx->get_char(ctx->get_char_data);
       }
     } else {
@@ -96,13 +97,32 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
           }
           ctx->token_buf = resized_buf;
         }
-        if (ctx->look_ahead == '"') {
+        if (ctx->look_ahead == '"' && !ctx->esc) {
           ctx->in_quotes = !ctx->in_quotes;
         } else if (ctx->look_ahead == 0) {
           /* this is an error */
           break;
         }
-        ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+        if (ctx->esc) {
+          switch(ctx->look_ahead) {
+            case 'n':
+              ctx->token_buf[ctx->token_buf_pos ++] = '\n';
+              break;
+            case 'r':
+              ctx->token_buf[ctx->token_buf_pos ++] = '\r';
+              break;
+            default:
+              ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+              break;
+          }
+          ctx->esc = 0;
+        } else {
+          if (ctx->look_ahead == '\\') {
+            ctx->esc = 1;
+          }  else {
+            ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
+          }
+        }
         ctx->look_ahead = ctx->get_char(ctx->get_char_data);
       } while (ctx->in_quotes);
     }
@@ -122,10 +142,10 @@ typedef struct cell_s cell_t;
 
 enum cell_type_e {
   CELL_T_EMPTY, CELL_T_PAIR, CELL_T_STRING, CELL_T_SYMBOL,
-  CELL_T_INTEGER, CELL_T_PRIMOP, CELL_T_LAMBDA};
+  CELL_T_INTEGER, CELL_T_PRIMOP, CELL_T_LAMBDA, CELL_T_MACRO};
 
 static char *cell_type_names[] = {
-  "empty", "pair", "string", "symbol", "integer", "primop", "lambda", NULL
+  "empty", "pair", "string", "symbol", "integer", "primop", "lambda", "macro", NULL
 };
 
 struct cell_s {
@@ -146,11 +166,19 @@ struct cell_s {
       cell_t *names;
       cell_t *body;
     } lambda;
+    struct {
+      cell_t *arg_name;
+      cell_t *body;
+    } macro;
   } u;
 };
 
-#define MAX_MEMORY (1024 * 4)
+#define MAX_MEMORY (1024 * 16)
+#define MAX_SINK_SIZE 1024
+
 struct scheme_ctx_s {
+  cell_t *sink[MAX_SINK_SIZE];
+  int  sink_pos;
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
   cell_t FALSE_VALUE;
@@ -158,12 +186,11 @@ struct scheme_ctx_s {
   cell_t *FALSE;
   cell_t *TRUE;
   cell_t *syms;
-  cell_t *sink;
   cell_t *env;
   cell_t *code;
   cell_t *result;
   cell_t *args;
-  cell_t memory[MAX_MEMORY];
+  cell_t *memory;
   int memory_in_use;
   int memory_pos;
   tokenizer_ctx_t tokenizer_ctx;
@@ -176,6 +203,13 @@ struct scheme_ctx_s {
   cell_t *SYMBOL_DEFINE;
   cell_t *SYMBOL_DOT;
   cell_t *SYMBOL_QUOTE_ALIAS;
+  cell_t *SYMBOL_QUASIQUOTE;
+  cell_t *SYMBOL_QUASIQUOTE_ALIAS;
+  cell_t *SYMBOL_MACRO;
+  cell_t *SYMBOL_UNQUOTE;
+  cell_t *SYMBOL_UNQUOTE_ALIAS;
+  cell_t *SYMBOL_UNQUOTE_SPLICE;
+  cell_t *SYMBOL_UNQUOTE_SPLICE_ALIAS;
 };
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
@@ -189,17 +223,16 @@ cell_t *raw_get_cell(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   }
   int i = ctx->memory_pos;
   for (int cnt = 0; cnt < MAX_MEMORY; ++cnt) {
-    if (!(ctx->memory[i].flags & CELL_F_USED)) {
-      ctx->memory[i].flags |= CELL_F_USED;
+    cell_t *current_cell = &ctx->memory[i];
+    if (!(current_cell->flags & CELL_F_USED)) {
+      current_cell->flags |= CELL_F_USED;
       ctx->memory_in_use += 1;
-      ctx->memory_pos = i;
-      return &ctx->memory[i];
+      ctx->memory_pos = (i + 1) % MAX_MEMORY;
+      return current_cell;
     }
     i = (i + 1) % MAX_MEMORY;
   }
   printf("out of memory\n");
- /* print_obj(ctx, ctx->sink);
-  printf("\n"); */
   exit(1);
   return NULL;
 }
@@ -221,7 +254,11 @@ cell_t *get_cell(scheme_ctx_t *ctx)
 
 cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *cell)
 {
-  ctx->sink = raw_cons(ctx, cell, ctx->sink);
+  if (ctx->sink_pos >= MAX_SINK_SIZE) {
+    printf("out of sink space\n");
+    return cell;
+  }
+  ctx->sink[ctx->sink_pos ++] = cell;
   return cell;
 }
 
@@ -254,6 +291,10 @@ void mark_cells(cell_t *cell)
       mark_cells(cell->u.lambda.names);
       mark_cells(cell->u.lambda.body);
       break;
+    case CELL_T_MACRO:
+      mark_cells(cell->u.macro.arg_name);
+      mark_cells(cell->u.macro.body);
+      break;
     default:
       break;
   }
@@ -274,6 +315,10 @@ void unmark_cells(cell_t *cell)
       unmark_cells(cell->u.lambda.names);
       unmark_cells(cell->u.lambda.body);
       break;
+    case CELL_T_MACRO:
+      unmark_cells(cell->u.macro.arg_name);
+      unmark_cells(cell->u.macro.body);
+      break;
     default:
       break;
   }
@@ -282,7 +327,9 @@ void unmark_cells(cell_t *cell)
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
 void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
 {
-  mark_cells(ctx->sink);
+  for(int i = 0; i < ctx->sink_pos; ++i) {
+    mark_cells(ctx->sink[i]);
+  }
   mark_cells(ctx->syms);
   mark_cells(ctx->env);
   mark_cells(ctx->args);
@@ -291,40 +338,27 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   mark_cells(tmp_b);
 
 
+  for (int i = 0; i < MAX_MEMORY; ++i) {
+    cell_t *current_cell = &ctx->memory[i];
+    if ((current_cell->flags & (CELL_F_USED | CELL_F_MARK)) == CELL_F_USED) {
+      current_cell->flags = 0;
 #if 0
-  for (int i = 0; i < MAX_MEMORY; ++i) {
-    if (ctx->memory[i].flags & CELL_F_USED) {
-      if (!(ctx->memory[i].flags & CELL_F_MARK)) {
-        printf("collect: ");
-        print_obj(ctx, &ctx->memory[i]);
-        printf("\n");
-      }
-    }
-  }
+      /* this is useful for debugging garbage collector */
+      memset(current_cell, 0, sizeof(*current_cell));
 #endif
-  int collected = 0;
-  for (int i = 0; i < MAX_MEMORY; ++i) {
-    if (ctx->memory[i].flags & CELL_F_USED) {
-      if (!(ctx->memory[i].flags & CELL_F_MARK)) {
-        ctx->memory[i].flags &= ~CELL_F_USED;
-        memset(&ctx->memory[i], 0, sizeof(ctx->memory[i]));
-        ctx->memory_in_use -= 1;
-        ++ collected;
-      }
+      ctx->memory_in_use -= 1;
     }
   }
-  unmark_cells(ctx->sink);
+
+  for (int i = 0; i < ctx->sink_pos; ++i) {
+    unmark_cells(ctx->sink[i]);
+  }
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
   unmark_cells(ctx->args);
   unmark_cells(ctx->result);
   unmark_cells(tmp_a);
   unmark_cells(tmp_b);
-#if GC_DEBUG
-  if (collected) {
-    printf("DEBUG: gc collect %d cells\n", collected);
-  }
-#endif
 }
 
 void gc_info(scheme_ctx_t *ctx)
@@ -348,18 +382,20 @@ void gc_info(scheme_ctx_t *ctx)
 #define is_false(ctx, obj) ((obj) == (ctx)->FALSE)
 #define is_primop(obj) ((obj)->type == CELL_T_PRIMOP)
 #define is_lambda(obj) ((obj)->type == CELL_T_LAMBDA)
+#define is_macro(obj) ((obj)->type == CELL_T_MACRO)
 /* symbols */
+
+static int get_args(cell_t *args, int nr, int types[], cell_t *ret[]);
 
 cell_t *mk_symbol(scheme_ctx_t *ctx, char *str)
 {
-  cell_t *ret = ctx->NIL;
   for (cell_t *tmp = ctx->syms; !is_null(ctx, tmp); tmp = _cdr(tmp)) {
     if (!strcmp(str, _car(tmp)->u.symbol)) {
       return _car(tmp);
     }
   }
   /* add new entry */
-  ret = get_cell(ctx);
+  cell_t *ret = get_cell(ctx);
   ret->type = CELL_T_SYMBOL;
   ret->u.symbol = strdup(str);
   ctx->syms = cons(ctx, ret, ctx->syms);
@@ -392,12 +428,42 @@ cell_t *mk_integer(scheme_ctx_t *ctx, int integer)
 
 cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
 {
+  cell_t *arg[2];
+  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(lambda, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  if (!is_pair(arg[0]) && !is_sym(arg[0]) && !is_null(ctx, arg[0])) {
+    printf("lambda: parameter 1 must be a pair or sym\n");
+    return ctx->NIL;
+  }
   cell_t *ret = get_cell(ctx);
   ret->type = CELL_T_LAMBDA;
   ret->u.lambda.names = _car(lambda); /* XXX arg 1 */
   ret->u.lambda.body = _car(_cdr(lambda)); /* XXX arg 2 */
   return ret;
 }
+
+cell_t *mk_macro(scheme_ctx_t *ctx, cell_t *arg, cell_t *body)
+{
+
+#if 0
+      printf("DEBUG:");
+      printf("\nname = ");
+      print_obj(ctx, macro_name);
+      printf("\narg = ");
+      print_obj(ctx, macro_arg);
+      printf("\nbody= ");
+      print_obj(ctx, body);
+      printf("\n");
+#endif
+      cell_t *ret = get_cell(ctx);
+      ret->type = CELL_T_MACRO;
+      ret->u.macro.arg_name = arg;
+      ret->u.macro.body = body;
+      return ret;
+}
+
 
 /* --- obj --- */
 
@@ -433,6 +499,11 @@ cell_t *get_object(scheme_ctx_t *ctx);
 cell_t *get_obj_list(scheme_ctx_t *ctx)
 {
   cell_t *obj = get_object(ctx);
+  if (!obj) {
+    /* EOF reached */
+    printf("missing ')' at end of input\n");
+    exit(1);
+  }
   if (obj == ctx->PARENTHESIS_CLOSE) {
     return ctx->NIL;
   }
@@ -460,6 +531,10 @@ cell_t *get_object(scheme_ctx_t *ctx)
   cell_t *obj = mk_object_from_token(ctx, value);
   if (obj == ctx->SYMBOL_QUOTE_ALIAS) {
     return cons(ctx, ctx->SYMBOL_QUOTE, cons(ctx, get_object(ctx), ctx->NIL));
+  } else if (obj == ctx->SYMBOL_QUASIQUOTE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_QUASIQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
+  } else if (obj == ctx->SYMBOL_UNQUOTE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_UNQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->PARENTHESIS_OPEN) {
     return get_obj_list(ctx);
   }
@@ -503,6 +578,9 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
     case CELL_T_LAMBDA:
       printf("<lambda>");
       break;
+    case CELL_T_MACRO:
+      printf("<macro>");
+      break;
     default:
       if (is_null(ctx, obj)) {
         printf("()");
@@ -516,9 +594,6 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       break;
   }
 }
-
-/* primops */
-
 
 static char *get_type_name(int type)
 {
@@ -657,7 +732,7 @@ cell_t *op_lt_eq(scheme_ctx_t *ctx, cell_t *args) {
   return arg[0]->u.integer <= arg[1]->u.integer ? ctx->TRUE : ctx->FALSE;
 }
 
-cell_t *display(scheme_ctx_t *ctx, cell_t *args)
+cell_t *write_primop(scheme_ctx_t *ctx, cell_t *args)
 {
   cell_t *arg_array[1];
   int arg_types[] = {CELL_T_EMPTY};
@@ -667,9 +742,30 @@ cell_t *display(scheme_ctx_t *ctx, cell_t *args)
   return ctx->NIL;
 }
 
+cell_t *display(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg_array[1];
+  int arg_types[] = {CELL_T_EMPTY};
+  if (!get_args(args, 1, arg_types, arg_array)) {
+    if (arg_array[0]->type == CELL_T_STRING) {
+      printf("%s", arg_array[0]->u.string);
+    } else {
+      print_obj(ctx, arg_array[0]);
+    }
+  }
+  return ctx->NIL;
+}
+
 cell_t *newline(scheme_ctx_t *ctx, cell_t *args)
 {
   printf("\n");
+  return ctx->NIL;
+}
+
+cell_t *flush_output(scheme_ctx_t *ctx, cell_t *args)
+{
+  /* ignore args for now */
+  fflush(stdout);
   return ctx->NIL;
 }
 
@@ -769,6 +865,16 @@ cell_t *env_resolve(scheme_ctx_t *ctx, cell_t *symbol)
 /* eval */
 
 cell_t *eval(scheme_ctx_t *ctx, cell_t *obj);
+
+cell_t *eval_primop(scheme_ctx_t *ctx, cell_t *obj)
+{
+  if (list_length( obj )!= 1) {
+    printf("eval only has/needs one argument\n");
+    return ctx->NIL;
+  }
+  return eval(ctx, _car(obj));
+}
+
 cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
 {
   if (ctx->NIL == list) {
@@ -779,10 +885,108 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
   return cons(ctx, add_to_sink(ctx, eval(ctx, _car(list))), eval_list(ctx, _cdr(list)));
 }
 
+cell_t *apply_macro( scheme_ctx_t *ctx, cell_t *macro, cell_t *args)
+{
+  cell_t *ret = ctx->NIL;
+  cell_t *old_env = ctx->env;
+
+  env_define(ctx, macro->u.macro.arg_name, args);
+  ret = eval(ctx, eval(ctx, macro->u.macro.body));
+
+  ctx->env = old_env;
+
+  return ret;
+}
+
+cell_t *apply_lambda(
+    scheme_ctx_t *ctx,
+    cell_t *lambda,
+    cell_t *args,
+    cell_t *last_lambda,
+    cell_t **tail_recursion_args);
+
+cell_t *apply(scheme_ctx_t *ctx, cell_t *args)
+{
+  cell_t *arg[2];
+  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
+  if (get_args(args, 2, types, arg)) {
+    return ctx->NIL;
+  }
+  /* XXX check if arg[1] is either NULL or PAIR */
+  if (!is_null(ctx, arg[1]) && !is_pair(arg[1])) {
+    printf("argument 1 must be pair (or null)\n");
+  } else if (is_primop(arg[0])) {
+    return apply_primop(ctx, arg[0], arg[1]);
+  } else if (is_lambda(arg[0])) {
+    return apply_lambda(ctx, arg[0], arg[1], NULL, NULL);
+  } else {
+    printf("error applying\n");
+  }
+  return ctx->NIL;
+}
+
 cell_t *eval_ex(scheme_ctx_t *ctx,
     cell_t *obj,
     cell_t *last_lambda,
     cell_t **tail_recursion_args);
+
+
+cell_t *apply_lambda(
+    scheme_ctx_t *ctx,
+    cell_t *lambda,
+    cell_t *args,
+    cell_t *last_lambda,
+    cell_t **tail_recursion_args)
+{
+  if (lambda == last_lambda && tail_recursion_args) {
+    /* TAIL RECURSION: */
+    /* evaluate arguments and return to caller */
+    *tail_recursion_args = eval_list(ctx, args);
+    return ctx->NIL;
+  }
+  cell_t *old_env = ctx->env;  /* XXX */
+  int old_sink_pos = ctx->sink_pos;
+  cell_t *rec = NULL;
+  cell_t *vars  = args;
+  cell_t *ret;
+
+  do {
+    cell_t *names = lambda->u.lambda.names;
+    cell_t *body  = lambda->u.lambda.body;
+    if (is_pair(names)) {
+      for( ;
+          !is_null(ctx, names) && !is_null(ctx, vars);
+          names = _cdr(names), vars = _cdr(vars)) {
+        /* when in TAIL RECURSION arguments are already evaluated ... */
+        if (rec) {
+          env_define(ctx, _car(names), _car(vars));
+        } else {
+          env_define(ctx, _car(names), eval(ctx, _car(vars)));
+        }
+      }
+    } else {
+      if (rec) {
+        env_define(ctx, names, vars);
+      } else {
+        env_define(ctx, names, eval_list(ctx, vars));
+      }
+    }
+    rec = NULL;
+    ret = eval_ex(ctx, body, lambda, &rec);
+    if (rec) {
+      /* TAIL RECURSION */
+      vars = rec;
+      ctx->args = vars; /* for gc */
+      ctx->result = ret; /* for gc */
+    } else {
+      ctx->args = ctx->NIL;
+    }
+    ctx->env = old_env;  /* XXX */
+    ctx->sink_pos = old_sink_pos; /*XXX  */
+  } while(rec);
+  return ret;
+}
+
 
 cell_t *eval(scheme_ctx_t *ctx, cell_t *obj)
 {
@@ -795,8 +999,7 @@ cell_t *eval_ex(
     cell_t      **tail_recursion_args)
 {
   cell_t *ret = ctx->NIL;
-  cell_t *old_sink = ctx->sink;
-  cell_t *old_env = ctx->env;
+  int old_sink_pos = ctx->sink_pos;
 
   if (is_null(ctx, obj)) {
     printf("error try to apply NULL\n");
@@ -823,6 +1026,13 @@ cell_t *eval_ex(
           ret = eval_ex(ctx, c, last_lambda, tail_recursion_args);
         }
       }
+    } else if (cmd == ctx->SYMBOL_MACRO) {
+      cell_t *arg0 = _car(args); /* name + arg */
+      cell_t *macro_body = _car(_cdr(args)); /* body */
+      cell_t *macro_name = _car(arg0);
+      cell_t *macro_arg = _car(_cdr(arg0));
+      ret = env_define(ctx, macro_name,
+          mk_macro(ctx, macro_arg, macro_body));
     } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
         printf("ERROR: define requites 2 arguments\n");
@@ -839,6 +1049,8 @@ cell_t *eval_ex(
       ret = mk_lambda(ctx, args);
     } else if (cmd == ctx->SYMBOL_QUOTE) {
       ret = _car(args);
+    } else if (cmd == ctx->SYMBOL_QUASIQUOTE) {
+      /* XXX do this ... recursive ;) */
     } else if (cmd == ctx->SYMBOL_BEGIN) {
       while( !is_null(ctx, args)) {
         if (is_null(ctx, _cdr(args))) {
@@ -856,63 +1068,33 @@ cell_t *eval_ex(
       } else if (is_primop(resolved_cmd)) {
         ret = apply_primop(ctx, resolved_cmd, eval_list(ctx, args));
       } else if (is_lambda(resolved_cmd)) {
-        ret = eval_ex(ctx,
-            cons(ctx, resolved_cmd, args), last_lambda, tail_recursion_args);
+        ret = apply_lambda(ctx, resolved_cmd, args, last_lambda, tail_recursion_args);
+      } else if (is_macro(resolved_cmd)) {
+        ret = apply_macro(ctx, resolved_cmd, cons(ctx, resolved_cmd, args));
       }
     }
   } else if(is_pair(_car(obj))) {
     ret = eval_ex (ctx, _car(obj), last_lambda, tail_recursion_args);
     if (is_lambda(ret)) {
-      ret = eval_ex(ctx, cons(ctx, ret, _cdr(obj)), last_lambda, tail_recursion_args);
+      ret = apply_lambda(ctx, ret, _cdr(obj), last_lambda, tail_recursion_args);
+    } else if (is_macro(ret)) {
+      ret = apply_macro(ctx, ret, obj);
     }
   } else if(is_lambda(_car(obj))){
-    /* lambda */
-    cell_t *lambda = _car(obj);
-    cell_t *args   = _cdr(obj);
-    if (lambda == last_lambda && tail_recursion_args) {
-      /* TAIL RECURSION: */
-      /* evaluate arguments and return to caller */
-      *tail_recursion_args = eval_list(ctx, args);
-      ctx->sink = old_sink; /*XXX  */
-      return ctx->NIL;
-    }
-    cell_t *rec = NULL;
-    cell_t *vars  = args;
-
-    do {
-      cell_t *names = lambda->u.lambda.names;
-      cell_t *body  = lambda->u.lambda.body;
-      for( ;
-          !is_null(ctx, names) && !is_null(ctx, vars);
-          names = _cdr(names), vars = _cdr(vars)) {
-        /* when in TAIL RECURSION arguments are already evaluated ... */
-        if (rec) {
-          env_define(ctx, _car(names), _car(vars));
-        } else {
-          env_define(ctx, _car(names), eval(ctx, _car(vars)));
-        }
-      }
-      rec = NULL;
-      ret = eval_ex(ctx, body, lambda, &rec);
-      if (rec) {
-        /* TAIL RECURSION */
-      //  names = _car(_cdr(lambda));
-        vars = rec;
-        ctx->args = vars; /* for gc */
-        ctx->result = ret; /* for gc */
-      } else {
-        ctx->args = ctx->NIL;
-      }
-      ctx->env = old_env;  /* XXX */
-      ctx->sink = old_sink; /* XXX */
-    } while(rec);
+    cell_t *cmd = _car(obj);
+    cell_t *args = _cdr(obj);
+    ret = apply_lambda(ctx, cmd, args, last_lambda, tail_recursion_args);
+  } else if(is_macro(_car(obj))) {
+    ret = apply_macro(ctx, _car(obj), obj);
+  } else if(is_primop(_car(obj))) {
+    ret = apply_primop(ctx, _car(obj), _cdr(obj));
   } else {
     printf("cannot apply\n");
     print_obj(ctx, obj);
     printf("\n");
   }
   ctx->result = ret; /* keep result from being GCed */
-  ctx->sink = old_sink;
+  ctx->sink_pos = old_sink_pos;
   return ret;
 }
 
@@ -922,12 +1104,13 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->NIL = &ctx->NIL_VALUE;
   ctx->TRUE = &ctx->TRUE_VALUE;
   ctx->FALSE = &ctx->FALSE_VALUE;
-  ctx->sink = ctx->NIL;
+  ctx->sink_pos = 0;
   ctx->syms = ctx->NIL;
   ctx->env = ctx->NIL;
   ctx->code = ctx->NIL;
   ctx->result = ctx->NIL;
   ctx->args = ctx->NIL;
+  ctx->memory = calloc(1, sizeof(cell_t) * MAX_MEMORY);
   /* init tokenizer for stdin */
   tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
 
@@ -940,12 +1123,23 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->SYMBOL_DEFINE = mk_symbol(ctx, "define");
   ctx->SYMBOL_QUOTE_ALIAS = mk_symbol(ctx, "'");
   ctx->SYMBOL_QUOTE = mk_symbol(ctx,"quote");
+  ctx->SYMBOL_QUASIQUOTE = mk_symbol(ctx, "quasiquote");
+  ctx->SYMBOL_QUASIQUOTE_ALIAS = mk_symbol(ctx, "`");
+  ctx->SYMBOL_UNQUOTE = mk_symbol(ctx, "unquote");
+  ctx->SYMBOL_UNQUOTE_ALIAS = mk_symbol(ctx, ",");
+  ctx->SYMBOL_UNQUOTE_SPLICE = mk_symbol(ctx, "unquote-splice");
+  ctx->SYMBOL_UNQUOTE_SPLICE_ALIAS = mk_symbol(ctx, ",@");
+  ctx->SYMBOL_MACRO = mk_symbol(ctx, "macro");
 
   env_define(ctx, mk_symbol(ctx, "#t"), ctx->TRUE);
   env_define(ctx, mk_symbol(ctx, "#f"), ctx->FALSE);
   env_define(ctx, mk_symbol(ctx, "eq?"), mk_primop(ctx, &eq));
+  env_define(ctx, mk_symbol(ctx, "apply"), mk_primop(ctx, &apply));
+  env_define(ctx, mk_symbol(ctx, "eval"), mk_primop(ctx, &eval_primop));
+  env_define(ctx, mk_symbol(ctx, "write"), mk_primop(ctx, &write_primop));
   env_define(ctx, mk_symbol(ctx, "display"), mk_primop(ctx, &display));
   env_define(ctx, mk_symbol(ctx, "newline"), mk_primop(ctx, &newline));
+  env_define(ctx, mk_symbol(ctx, "flush-output"), mk_primop(ctx, &flush_output));
   env_define(ctx, mk_symbol(ctx, "cons"), mk_primop(ctx, &primop_cons));
   env_define(ctx, mk_symbol(ctx, "length"), mk_primop(ctx, &primop_length));
   env_define(ctx, mk_symbol(ctx, "car"), mk_primop(ctx, &car));
@@ -962,7 +1156,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   env_define(ctx, mk_symbol(ctx, "<"), mk_primop(ctx, &op_lt));
   env_define(ctx, mk_symbol(ctx, ">="), mk_primop(ctx, &op_gt_eq));
   env_define(ctx, mk_symbol(ctx, "<="), mk_primop(ctx, &op_lt_eq));
-  ctx->sink = ctx->NIL;
+  ctx->sink_pos = 0;
   gc_collect(ctx, ctx->NIL, ctx->NIL);
   /* debug output */
   gc_info(ctx);
@@ -975,10 +1169,8 @@ void scheme_load_memory(scheme_ctx_t *ctx, char *memory, size_t len)
   data.pos = 0;
   data.memory = memory;
   tokenizer_init(&ctx->tokenizer_ctx, memory_get_char, &data);
-  cell_t *old_sink = ctx->sink;
   for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
     eval(ctx, obj);
-    ctx->sink = old_sink;
   }
 }
 
@@ -991,10 +1183,8 @@ void scheme_load_file(scheme_ctx_t *ctx, char *filename)
   }
   tokenizer_init(&ctx->tokenizer_ctx, default_get_char, fd);
 
-  cell_t *old_sink = ctx->sink;
   for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
     eval(ctx, obj);
-    ctx->sink = old_sink;
   }
   fclose(fd);
 }
@@ -1011,7 +1201,6 @@ int main(int argc, char *argv[])
     while((obj = get_object(&ctx))) {
       print_obj(&ctx, eval(&ctx, obj));
       printf("\n");
-      ctx.sink = ctx.NIL;
     }
   }
 
