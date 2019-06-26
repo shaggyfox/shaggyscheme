@@ -902,7 +902,9 @@ cell_t *apply(scheme_ctx_t *ctx, cell_t *args)
     return ctx->NIL;
   }
   /* XXX check if arg[1] is either NULL or PAIR */
-  if (is_primop(arg[0])) {
+  if (!is_null(ctx, arg[1]) && !is_pair(arg[1])) {
+    printf("argument 1 must be pair (or null)\n");
+  } else if (is_primop(arg[0])) {
     return apply_primop(ctx, arg[0], arg[1]);
   } else if (is_lambda(arg[0])) {
     return apply_lambda(ctx, arg[0], arg[1], NULL, NULL);
