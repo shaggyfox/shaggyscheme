@@ -407,6 +407,8 @@ cell_t *get_object(scheme_ctx_t *ctx)
     return cons(ctx, ctx->SYMBOL_UNQUOTE, cons(ctx, get_object(ctx), ctx->NIL));
   } else if (obj == ctx->PARENTHESIS_OPEN) {
     return get_obj_list(ctx);
+  } else if (obj == ctx->SYMBOL_UNQUOTE_SPLICE_ALIAS) {
+    return cons(ctx, ctx->SYMBOL_UNQUOTE_SPLICE, cons(ctx, get_object(ctx), ctx->NIL));
   }
   return obj;
 }
@@ -769,6 +771,11 @@ cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
   } else if (is_pair(_car(list))) {
       if (ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
         obj = eval(ctx, _car(_cdr(_car(list))));
+      } else if (ctx->SYMBOL_UNQUOTE_SPLICE == _car(_car(list))) {
+        obj = eval_list(ctx, _cdr(_car(list)));
+        print_obj(ctx,obj);
+        printf("\n");
+        return _car(obj);
       } else {
         obj = eval_quasiquote(ctx, _car(list));
       }
