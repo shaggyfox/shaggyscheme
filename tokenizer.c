@@ -105,7 +105,7 @@ char *tokenizer_get_token(tokenizer_ctx_t *ctx)
       ctx->token_buf[ctx->token_buf_pos ++] = ctx->next_char;
     }
     if (0 == (ctx->next_char = ctx->get_char(ctx->get_char_data))) {
-      if (ctx->token_buf_pos) {
+      if (ctx->token_buf_pos > 1) {
         ctx->token_buf[ctx->token_buf_pos] = '\0';
         ctx->token_buf_pos = 0;
         break;
