@@ -758,11 +758,12 @@ cell_t *eval_list(scheme_ctx_t *ctx, cell_t *list)
 cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
 {
   if (!is_pair(list)) {
-    return ctx->NIL;
+    return list;
   }
   cell_t *obj;
-  if (is_pair(_car(list)) && ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
-    printf("iaren\n");
+  if (ctx->SYMBOL_UNQUOTE == _car(list)) {
+    return eval (ctx, _car(_cdr(list)));
+  } else if (is_pair(_car(list)) && ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
     obj = eval(ctx, _car(_cdr(_car(list))));
   } else {
     obj = _car(list);
