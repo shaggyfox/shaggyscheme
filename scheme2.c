@@ -763,8 +763,12 @@ cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
   cell_t *obj;
   if (ctx->SYMBOL_UNQUOTE == _car(list)) {
     return eval (ctx, _car(_cdr(list)));
-  } else if (is_pair(_car(list)) && ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
-    obj = eval(ctx, _car(_cdr(_car(list))));
+  } else if (is_pair(_car(list))) {
+      if (ctx->SYMBOL_UNQUOTE == _car(_car(list))) {
+        obj = eval(ctx, _car(_cdr(_car(list))));
+      } else {
+        obj = eval_quasiquote(ctx, _car(list));
+      }
   } else {
     obj = _car(list);
   }
@@ -793,20 +797,25 @@ cell_t *apply_lambda(
 
 cell_t *apply(scheme_ctx_t *ctx, cell_t *args)
 {
-  cell_t *arg[2];
-  int types[2] = {CELL_T_EMPTY, CELL_T_EMPTY};
-  if (get_args(args, 2, types, arg)) {
-    return ctx->NIL;
-  }
-  /* XXX check if arg[1] is either NULL or PAIR */
-  if (!is_null(ctx, arg[1]) && !is_pair(arg[1])) {
-    printf("argument 1 must be pair (or null)\n");
-  } else if (is_primop(arg[0])) {
-    return apply_primop(ctx, arg[0], arg[1]);
-  } else if (is_lambda(arg[0])) {
-    return apply_lambda(ctx, arg[0], arg[1], NULL, NULL);
+  cell_t *arg[2] = {ctx->NIL, ctx->NIL};
+  if (!(is_pair(args))) {
+    printf("ERROR: apply needs an argument\n");
   } else {
-    printf("error applying\n");
+    arg[0] = _car(args);
+    if (is_pair(_cdr(args))) {
+      if (!is_null(ctx, _car(_cdr(args))) && !is_pair(_car(_cdr(args)))) {
+        printf("ERROR: apply: argument 1 must be pair (or null)\n");
+        return ctx->NIL;
+      }
+      arg[1] = _car(_cdr(args));
+    }
+    if (is_primop(arg[0])) {
+      return apply_primop(ctx, arg[0], arg[1]);
+    } else if (is_lambda(arg[0])) {
+      return apply_lambda(ctx, arg[0], arg[1], NULL, NULL);
+    } else {
+      printf("ERROR: apply: cannot apply\n");
+    }
   }
   return ctx->NIL;
 }
