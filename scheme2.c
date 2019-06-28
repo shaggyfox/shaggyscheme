@@ -773,8 +773,6 @@ cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
         obj = eval(ctx, _car(_cdr(_car(list))));
       } else if (ctx->SYMBOL_UNQUOTE_SPLICE == _car(_car(list))) {
         obj = eval_list(ctx, _cdr(_car(list)));
-        print_obj(ctx,obj);
-        printf("\n");
         return _car(obj);
       } else {
         obj = eval_quasiquote(ctx, _car(list));
