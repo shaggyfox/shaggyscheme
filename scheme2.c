@@ -420,6 +420,9 @@ void print_pair(scheme_ctx_t *ctx, cell_t *pair)
   while (is_pair(pair)) {
     print_obj(ctx, _car(pair));
     pair = _cdr(pair);
+    if (is_pair(pair)) {
+      printf(" ");
+    }
   }
   if (!is_null(ctx, pair)) {
     printf(". ");
@@ -431,19 +434,19 @@ void print_pair(scheme_ctx_t *ctx, cell_t *pair)
 void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
   switch ((obj)->type) {
     case CELL_T_PRIMOP:
-      printf("<primop> ");
+      printf("<primop>");
       break;
     case CELL_T_SYMBOL:
-      printf("%s ", obj->u.symbol);
+      printf("%s", obj->u.symbol);
       break;
     case CELL_T_STRING:
-      printf("\"%s\" ", obj->u.string);
+      printf("\"%s\"", obj->u.string);
       break;
     case CELL_T_PAIR:
       print_pair(ctx, obj);
       break;
     case CELL_T_INTEGER:
-      printf("%i ", obj->u.integer);
+      printf("%i", obj->u.integer);
       break;
     case CELL_T_LAMBDA:
       printf("<lambda>");
@@ -455,11 +458,11 @@ void print_obj(scheme_ctx_t *ctx, cell_t *obj) {
       if (is_null(ctx, obj)) {
         printf("()");
       } else if (is_true(ctx, obj)) {
-        printf("#t ");
+        printf("#t");
       } else if (is_false(ctx, obj)) {
-        printf("#f ");
+        printf("#f");
       } else {
-        printf("<unknown> ");
+        printf("<unknown>");
       }
       break;
   }
