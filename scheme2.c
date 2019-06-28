@@ -1,137 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* tokenizer */
-
-struct tokenizer_ctx_s {
-  char *token_buf;
-  size_t token_buf_size;
-  size_t token_buf_pos;
-  char look_ahead;
-  char (*get_char)(void *data);
-  void *get_char_data;
-  int in_quotes;
-  int esc;
-};
-
-typedef struct tokenizer_ctx_s tokenizer_ctx_t;
-
-char default_get_char(void *data)
-{
-  int v;
-  if (data) {
-    v = getc((FILE*) data);
-  } else {
-    v = getchar();
-  }
-  if (v == EOF) {
-    return 0;
-  }
-  return (char)v;
-}
-
-struct memory_get_char_data_s {
-  char *memory;
-  int len;
-  int pos;
-};
-
-char memory_get_char(void *in_data)
-{
-  struct memory_get_char_data_s *data = in_data;
-  if (data->pos >= data->len) {
-    return '\0';
-  }
-  return data->memory[data->pos ++];
-}
-
-void tokenizer_init(tokenizer_ctx_t *ctx, char (*get_char)(void*), void *data)
-{
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->get_char = get_char ? get_char : default_get_char;
-  ctx->get_char_data = data;
-  ctx->token_buf_size = 32;
-  ctx->token_buf = calloc(1, ctx->token_buf_size);
-  /* initialize look-ahead with whitespace */
-  ctx->look_ahead = ' ';
-}
-
-#define is_whitespace(x) ((x) == ' ' || (x) == '\n' || (x) == ';')
-#define is_special(x) ((x) == '(' || (x) == ')' || (x) == '\'' || (x) == '.' )
-#define is_qoute(x)
-
-char *tokenizer_get_token(tokenizer_ctx_t *ctx)
-{
-  /* skip whitespace */
-  while(is_whitespace(ctx->look_ahead)) {
-    /* skip commentary */
-    if (ctx->look_ahead == ';') {
-      while(ctx->look_ahead != '\n' && ctx->look_ahead != 0) {
-        ctx->look_ahead = ctx->get_char(ctx->get_char_data);
-      }
-    } else {
-      ctx->look_ahead = ctx->get_char(ctx->get_char_data);
-    }
-  }
-
-  do {
-    if (ctx->look_ahead == 0) {
-      if (ctx->token_buf_pos) {
-        break;
-      }
-      return NULL;
-    } else if (is_special(ctx->look_ahead)) {
-      ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
-      ctx->look_ahead = ctx->get_char(ctx->get_char_data);
-      break;
-    } else {
-      do {
-        if (ctx->token_buf_pos >= ctx->token_buf_size - 1) {
-          ctx->token_buf_size *= 2;
-          char *resized_buf = realloc(ctx->token_buf, ctx->token_buf_size);
-          if (!resized_buf) {
-            /* out of memory */
-            ctx->look_ahead = 0;
-            return NULL;
-          }
-          ctx->token_buf = resized_buf;
-        }
-        if (ctx->look_ahead == '"' && !ctx->esc) {
-          ctx->in_quotes = !ctx->in_quotes;
-        } else if (ctx->look_ahead == 0) {
-          /* this is an error */
-          break;
-        }
-        if (ctx->esc) {
-          switch(ctx->look_ahead) {
-            case 'n':
-              ctx->token_buf[ctx->token_buf_pos ++] = '\n';
-              break;
-            case 'r':
-              ctx->token_buf[ctx->token_buf_pos ++] = '\r';
-              break;
-            default:
-              ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
-              break;
-          }
-          ctx->esc = 0;
-        } else {
-          if (ctx->look_ahead == '\\') {
-            ctx->esc = 1;
-          }  else {
-            ctx->token_buf[ctx->token_buf_pos ++] = ctx->look_ahead;
-          }
-        }
-        ctx->look_ahead = ctx->get_char(ctx->get_char_data);
-      } while (ctx->in_quotes);
-    }
-  } while(!is_special(ctx->look_ahead) && !is_whitespace(ctx->look_ahead));
-  ctx->token_buf[ctx->token_buf_pos] = '\0';
-  ctx->token_buf_pos = 0;
-  return ctx->token_buf;
-}
-
+#include "tokenizer.h"
 
 /* -------------------- end of tokenizer ------------------------------- */
 /* -----------------------memory management ---------------------------- */
@@ -1127,7 +997,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->args = ctx->NIL;
   ctx->memory = calloc(1, sizeof(cell_t) * MAX_MEMORY);
   /* init tokenizer for stdin */
-  tokenizer_init(&ctx->tokenizer_ctx, NULL, NULL);
+  tokenizer_init_stdio(&ctx->tokenizer_ctx, stdin);
 
   ctx->PARENTHESIS_OPEN = mk_symbol(ctx, "(");
   ctx->PARENTHESIS_CLOSE = mk_symbol(ctx, ")");
@@ -1177,6 +1047,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   gc_info(ctx);
 }
 
+#if 0
 void scheme_load_memory(scheme_ctx_t *ctx, char *memory, size_t len)
 {
   struct memory_get_char_data_s data;
@@ -1188,6 +1059,7 @@ void scheme_load_memory(scheme_ctx_t *ctx, char *memory, size_t len)
     eval(ctx, obj);
   }
 }
+#endif
 
 void scheme_load_file(scheme_ctx_t *ctx, char *filename)
 {
@@ -1196,7 +1068,7 @@ void scheme_load_file(scheme_ctx_t *ctx, char *filename)
     printf("error open file\n");
     return;
   }
-  tokenizer_init(&ctx->tokenizer_ctx, default_get_char, fd);
+  tokenizer_init_stdio(&ctx->tokenizer_ctx, fd);
 
   for (cell_t *obj = get_object(ctx); obj; obj=get_object(ctx)) {
     eval(ctx, obj);

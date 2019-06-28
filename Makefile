@@ -1,5 +1,5 @@
 scheme: scheme2.c
-	gcc8 -O0 -ggdb -Wall scheme2.c -o scheme
+	gcc8 -O0 -ggdb -Wall scheme2.c tokenizer.c -o scheme
 
 .PHONY: clean
 
