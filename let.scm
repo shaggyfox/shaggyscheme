@@ -18,6 +18,3 @@
            ,(car(cdr(cdr form))))
          ,@(assoc_list_right (car(cdr form)))))
 
-(display (let ((x 1)) "bla"))
-(newline)
-(display "mmmm\n")

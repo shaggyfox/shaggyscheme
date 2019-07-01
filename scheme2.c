@@ -43,12 +43,11 @@ struct cell_s {
   } u;
 };
 
-#define MAX_MEMORY (1024 * 16)
 #define MAX_SINK_SIZE 1024
-
 struct scheme_ctx_s {
   cell_t *sink[MAX_SINK_SIZE];
   int  sink_pos;
+  size_t memory_size;
   cell_t NIL_VALUE;
   cell_t TRUE_VALUE;
   cell_t FALSE_VALUE;
@@ -82,47 +81,40 @@ struct scheme_ctx_s {
   cell_t *SYMBOL_UNQUOTE_SPLICE_ALIAS;
 };
 
-cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
-void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b);
+static cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *);
+static void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b);
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
 
-cell_t *raw_get_cell(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
+static cell_t *raw_get_cell(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
 {
-  if (MAX_MEMORY - ctx->memory_in_use < 1) {
+  if (ctx->memory_size - ctx->memory_in_use < 1) {
     gc_collect(ctx, tmp_a, tmp_b);
   }
   int i = ctx->memory_pos;
-  for (int cnt = 0; cnt < MAX_MEMORY; ++cnt) {
-    cell_t *current_cell = &ctx->memory[i];
+  size_t memory_size = ctx->memory_size;
+  cell_t *memory = ctx->memory;
+  for (int cnt = 0; cnt < memory_size; ++cnt) {
+    cell_t *current_cell = &memory[i];
     if (!(current_cell->flags & CELL_F_USED)) {
       current_cell->flags |= CELL_F_USED;
       ctx->memory_in_use += 1;
-      ctx->memory_pos = (i + 1) % MAX_MEMORY;
+      ctx->memory_pos = (i + 1) % memory_size;
       return current_cell;
     }
-    i = (i + 1) % MAX_MEMORY;
+    i = (i + 1) % memory_size;
   }
   printf("out of memory\n");
   exit(1);
   return NULL;
 }
 
-cell_t *raw_cons(scheme_ctx_t *ctx, cell_t *car, cell_t *cdr)
-{
-  cell_t *ret = raw_get_cell(ctx, car, cdr);
-  ret->type = CELL_T_PAIR;
-  ret->u.pair.car = car;
-  ret->u.pair.cdr = cdr;
-  return ret;
-}
-
-cell_t *get_cell(scheme_ctx_t *ctx)
+static cell_t *get_cell(scheme_ctx_t *ctx)
 {
   cell_t *ret = raw_get_cell(ctx, ctx->NIL, ctx->NIL);
   return add_to_sink(ctx, ret);
 }
 
-cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *cell)
+static cell_t *add_to_sink(scheme_ctx_t *ctx, cell_t *cell)
 {
   if (ctx->sink_pos >= MAX_SINK_SIZE) {
     printf("out of sink space\n");
@@ -195,8 +187,14 @@ void unmark_cells(cell_t *cell)
 }
 
 void print_obj(scheme_ctx_t *ctx, cell_t *obj);
-void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
+static void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
 {
+  cell_t **sink = ctx->sink;
+  cell_t *memory = ctx->memory;
+  size_t sink_pos = ctx->sink_pos;
+  size_t memory_size = ctx->memory_size;
+  size_t memory_in_use = ctx->memory_in_use;
+
   for(int i = 0; i < ctx->sink_pos; ++i) {
     mark_cells(ctx->sink[i]);
   }
@@ -207,21 +205,20 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   mark_cells(tmp_a);
   mark_cells(tmp_b);
 
-
-  for (int i = 0; i < MAX_MEMORY; ++i) {
-    cell_t *current_cell = &ctx->memory[i];
+  for (int i = 0; i < memory_size; ++i) {
+    cell_t *current_cell = &memory[i];
     if ((current_cell->flags & (CELL_F_USED | CELL_F_MARK)) == CELL_F_USED) {
       current_cell->flags = 0;
 #if 0
       /* this is useful for debugging garbage collector */
       memset(current_cell, 0, sizeof(*current_cell));
 #endif
-      ctx->memory_in_use -= 1;
+      memory_in_use -= 1;
     }
   }
 
-  for (int i = 0; i < ctx->sink_pos; ++i) {
-    unmark_cells(ctx->sink[i]);
+  for (int i = 0; i < sink_pos; ++i) {
+    unmark_cells(sink[i]);
   }
   unmark_cells(ctx->syms);
   unmark_cells(ctx->env);
@@ -229,13 +226,17 @@ void gc_collect(scheme_ctx_t *ctx, cell_t *tmp_a, cell_t *tmp_b)
   unmark_cells(ctx->result);
   unmark_cells(tmp_a);
   unmark_cells(tmp_b);
+
+  ctx->memory_in_use = memory_in_use;
 }
 
 void gc_info(scheme_ctx_t *ctx)
 {
-  int ret = MAX_MEMORY;
-  for (int i = 0; i < MAX_MEMORY; ++i) {
-    if (ctx->memory[i].flags & CELL_F_USED) {
+  int memory_size = ctx->memory_size;
+  int ret = memory_size;
+  cell_t *memory = ctx->memory;
+  for (int i = 0; i < memory_size; ++i) {
+    if (memory[i].flags & CELL_F_USED) {
       -- ret;
     }
   }
@@ -316,17 +317,6 @@ cell_t *mk_lambda(scheme_ctx_t *ctx, cell_t *lambda)
 
 cell_t *mk_macro(scheme_ctx_t *ctx, cell_t *arg, cell_t *body)
 {
-
-#if 0
-      printf("DEBUG:");
-      printf("\nname = ");
-      print_obj(ctx, macro_name);
-      printf("\narg = ");
-      print_obj(ctx, macro_arg);
-      printf("\nbody= ");
-      print_obj(ctx, body);
-      printf("\n");
-#endif
       cell_t *ret = get_cell(ctx);
       ret->type = CELL_T_MACRO;
       ret->u.macro.arg_name = arg;
@@ -785,11 +775,10 @@ cell_t *eval_quasiquote(scheme_ctx_t *ctx, cell_t *list)
 
 cell_t *apply_macro( scheme_ctx_t *ctx, cell_t *macro, cell_t *args)
 {
-  cell_t *ret = ctx->NIL;
   cell_t *old_env = ctx->env;
 
   env_define(ctx, macro->u.macro.arg_name, args);
-  ret = eval(ctx, eval(ctx, macro->u.macro.body));
+  cell_t *ret = eval(ctx, eval(ctx, macro->u.macro.body));
 
   ctx->env = old_env;
 
@@ -918,7 +907,7 @@ cell_t *eval_ex(
     if (cmd == ctx->SYMBOL_IF) {
       /* (if a b c) */
       if (list_length(args) != 3) {
-        printf("ERROR if requires 3 arguments\n");
+        printf("ERROR: 'if' requires 3 arguments\n");
       } else {
         cell_t *a = _car(args);
         cell_t *b = _car(_cdr(args));
@@ -930,20 +919,37 @@ cell_t *eval_ex(
         }
       }
     } else if (cmd == ctx->SYMBOL_MACRO) {
-      cell_t *arg0 = _car(args); /* name + arg */
-      cell_t *macro_body = _car(_cdr(args)); /* body */
-      cell_t *macro_name = _car(arg0);
-      cell_t *macro_arg = _car(_cdr(arg0));
-      ret = env_define(ctx, macro_name,
-          mk_macro(ctx, macro_arg, macro_body));
+      int arg_cnt = list_length(args);
+      if (arg_cnt == 2) {
+        cell_t *arg0 = _car(args); /* name + arg */
+        cell_t *macro_body = _car(_cdr(args)); /* body */
+
+        arg_cnt = list_length(arg0);
+        if (arg_cnt == 2) {
+          cell_t *macro_name = _car(arg0);
+          cell_t *macro_arg = _car(_cdr(arg0));
+          if (!is_sym(macro_name)) {
+            printf("ERROR: macro name must be a symbol\n");
+          } else if(!is_sym(macro_arg)) {
+            printf("ERROR: macro argument must be a symbol\n");
+          } else {
+            ret = env_define(ctx, macro_name,
+                mk_macro(ctx, macro_arg, macro_body));
+          }
+        } else {
+          printf("ERROR: macro illegal parameter 1, must be pair with 2 elements\n");
+        }
+      } else {
+        printf("ERROR: macro needs 2 arguments\n");
+      }
     } else if (cmd == ctx->SYMBOL_DEFINE) {
       if (list_length(args) != 2) {
-        printf("ERROR: define requites 2 arguments\n");
+        printf("ERROR: 'define' requites 2 arguments\n");
       } else {
         cell_t *name = _car(args);
         cell_t *value = _car(_cdr(args));
         if (!is_sym(name)) {
-          printf("define: name is not a symbol\n");
+          printf("ERROR: define: name is not a symbol\n");
         } else {
           ret = env_define(ctx, name, eval(ctx, value));
         }
@@ -1004,6 +1010,7 @@ cell_t *eval_ex(
 /* ---------------t main .. */
 void scheme_init(scheme_ctx_t *ctx) {
   memset(ctx, 0, sizeof(*ctx));
+  ctx->memory_size = 1024 * 16; /* 16k memory-cells */
   ctx->NIL = &ctx->NIL_VALUE;
   ctx->TRUE = &ctx->TRUE_VALUE;
   ctx->FALSE = &ctx->FALSE_VALUE;
@@ -1013,7 +1020,7 @@ void scheme_init(scheme_ctx_t *ctx) {
   ctx->code = ctx->NIL;
   ctx->result = ctx->NIL;
   ctx->args = ctx->NIL;
-  ctx->memory = calloc(1, sizeof(cell_t) * MAX_MEMORY);
+  ctx->memory = calloc(1, sizeof(cell_t) * ctx->memory_size);
   /* init tokenizer for stdin */
   tokenizer_init_stdio(&ctx->tokenizer_ctx, stdin);
 
@@ -1120,6 +1127,6 @@ int main(int argc, char *argv[])
       printf("\n");
     }
 #endif
-    gc_info(&ctx);
+    //gc_info(&ctx);
   return 0;
 }
