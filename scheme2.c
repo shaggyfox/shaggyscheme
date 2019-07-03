@@ -465,6 +465,17 @@ static char *get_type_name(int type)
   return cell_type_names[type];
 }
 
+int list_length(cell_t *args)
+{
+  int ret = 0;
+  while (is_pair(args)) {
+    ++ret;
+    args = _cdr(args);
+  }
+  return ret;
+}
+
+
 static int get_args(cell_t *args, int nr, int types[], cell_t *ret[])
 {
   int i = 0;
@@ -518,24 +529,41 @@ cell_t *cdr(scheme_ctx_t *ctx, cell_t *args)
   return _cdr(arg[0]);
 }
 
-static void plus_cb(int *ret, int in) { *ret += in; }
-static void minus_cb(int *ret, int in) { *ret -= in; }
-static void mul_cb(int *ret, int in) { *ret *= in; }
-static void div_cb(int *ret, int in) { *ret /= in; }
-
-cell_t *do_integer_math(
-    scheme_ctx_t *ctx,
-    cell_t *args,
-    void (*cb)(int *ret, int in))
-{
-  int ret = 0;
+cell_t *op_minus(scheme_ctx_t *ctx, cell_t *args) {
   int i = 0;
+  int ret = 0;
+  int len = list_length(args);
+  while (!is_null(ctx, args)) {
+    if (is_integer(_car(args))) {
+      if (i == 0 && len > 1) {
+        ret = _car(args)->u.integer;
+      } else {
+        ret -= _car(args)->u.integer;
+      }
+    } else {
+      printf("ERROR: integer expected %s given\n", get_type_name(_car(args)->type));
+      return ctx->NIL;
+    }
+    ++i;
+    args = _cdr(args);
+  }
+  if (i < 1) {
+    printf("ERROR: not enough arguments for '-'\n");
+    return ctx->NIL;
+  }
+  return mk_integer(ctx, ret);
+}
+
+cell_t *op_plus(scheme_ctx_t *ctx, cell_t *args)
+{
+  int i = 0;
+  int ret = 0;
   while (!is_null(ctx, args)) {
     if (is_integer(_car(args))) {
       if (i == 0) {
         ret = _car(args)->u.integer;
       } else {
-        (*cb)(&ret, _car(args)->u.integer);
+        ret += _car(args)->u.integer;
       }
     } else {
       printf("ERROR: integer expected %s given\n", get_type_name(_car(args)->type));
@@ -547,18 +575,45 @@ cell_t *do_integer_math(
   return mk_integer(ctx, ret);
 }
 
-
-cell_t *op_minus(scheme_ctx_t *ctx, cell_t *args) {
-  return do_integer_math(ctx, args, minus_cb);
-}
-cell_t *op_plus(scheme_ctx_t *ctx, cell_t *args) {
-  return do_integer_math(ctx, args, plus_cb);
-}
 cell_t *op_mul(scheme_ctx_t *ctx, cell_t *args) {
-  return do_integer_math(ctx, args, mul_cb);
+  int i = 0;
+  int ret = 1;
+  while (!is_null(ctx, args)) {
+    if (is_integer(_car(args))) {
+      ret *= _car(args)->u.integer;
+    } else {
+      printf("ERROR: integer expected %s given\n", get_type_name(_car(args)->type));
+      return ctx->NIL;
+    }
+    ++i;
+    args = _cdr(args);
+  }
+  return mk_integer(ctx, ret);
 }
+
 cell_t *op_div(scheme_ctx_t *ctx, cell_t *args) {
-  return do_integer_math(ctx, args, div_cb);
+  int i = 0;
+  int ret = 1;
+  int len = list_length(args);
+  while (!is_null(ctx, args)) {
+    if (is_integer(_car(args))) {
+      if (i == 0 && len > 1) {
+        ret = _car(args)->u.integer;
+      } else {
+        ret /= _car(args)->u.integer;
+      }
+    } else {
+      printf("ERROR: integer expected %s given\n", get_type_name(_car(args)->type));
+      return ctx->NIL;
+    }
+    ++i;
+    args = _cdr(args);
+  }
+  if (i < 1) {
+    printf("ERROR: not enough arguments for '/'\n");
+    return ctx->NIL;
+  }
+  return mk_integer(ctx, ret);
 }
 
 cell_t *op_gt(scheme_ctx_t *ctx, cell_t *args) {
@@ -672,16 +727,6 @@ cell_t *eqv(scheme_ctx_t *ctx, cell_t *args)
 cell_t *apply_primop(scheme_ctx_t *ctx, cell_t *primop, cell_t *args)
 {
   return primop->u.primop(ctx, args);
-}
-
-int list_length(cell_t *args)
-{
-  int ret = 0;
-  while (is_pair(args)) {
-    ++ret;
-    args = _cdr(args);
-  }
-  return ret;
 }
 
 cell_t *primop_length(scheme_ctx_t *ctx, cell_t *args)
